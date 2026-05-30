@@ -60,9 +60,12 @@
                     <span class="font-medium text-gray-800">{{ $diskUsed }} MB</span>
                 </div>
                 @if($diskQuota > 0)
-                    @php $percent = min(100, round(($diskUsed / $diskQuota) * 100)); @endphp
+                    @php
+                        $percent = min(100, round(($diskUsed / $diskQuota) * 100));
+                        $barColor = $percent > 90 ? 'bg-red-500' : ($percent > 70 ? 'bg-yellow-500' : 'bg-blue-500');
+                    @endphp
                     <div class="w-full bg-gray-200 rounded-full h-3">
-                        <div class="h-3 rounded-full {{ $percent > 90 ? 'bg-red-500' : ($percent > 70 ? 'bg-yellow-500' : 'bg-blue-500') }}" style="width: {{ $percent }}%"></div>
+                        <div @class(['h-3', 'rounded-full', $barColor]) @style(['width' => $percent . '%'])></div>
                     </div>
                     <div class="flex justify-between text-xs text-gray-500">
                         <span>{{ $percent }}% used</span>

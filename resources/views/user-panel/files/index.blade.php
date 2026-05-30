@@ -68,7 +68,7 @@
                             <td class="px-6 py-3 text-sm font-mono text-gray-600">{{ $item['perms'] }}</td>
                             <td class="px-6 py-3 text-sm text-gray-600">{{ date('Y-m-d H:i', $item['modified']) }}</td>
                             <td class="px-6 py-3">
-                                <form method="POST" action="{{ route('user.files.delete') }}" class="inline" onsubmit="return confirm('Delete {{ $item['name'] }}?')">
+                                <form method="POST" action="{{ route('user.files.delete') }}" class="inline" onsubmit="return confirm('Delete ' + this.dataset.name + '?')" data-name="{{ $item['name'] }}">
                                     @csrf
                                     <input type="hidden" name="path" value="{{ $item['path'] }}">
                                     <button type="submit" class="text-red-600 hover:text-red-800 text-xs"><i class="fas fa-trash"></i></button>
