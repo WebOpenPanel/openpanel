@@ -1,58 +1,204 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# OpenPanel
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+OpenPanel is a modern, web-based server control panel built with Laravel. It provides a clean, intuitive interface for managing web hosting servers running AlmaLinux, Rocky Linux, RHEL, CentOS, or Oracle Linux (EL8/EL9).
 
-## About Laravel
+## Features
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+### Server Management
+- **System Monitoring** — Real-time CPU, memory, disk, and network usage
+- **Process Manager** — View and manage running processes
+- **Service Control** — Start, stop, restart system services (Nginx, MySQL, PHP-FPM, etc.)
+- **Firewall (CSF)** — Full CSF/LFD firewall management with GUI
+- **SSH Terminal** — Browser-based SSH access
+- **Cron Jobs** — Visual cron job editor with logging
+- **YUM/DNF Package Manager** — Install and manage system packages
+- **Hostname & Network** — Configure hostname, DNS resolvers, network interfaces
+- **Server Time** — NTP timezone and sync management
+- **Root Password** — Change root password from the panel
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+### Web Server
+- **Nginx & Apache** — Manage virtual hosts, rebuild configs
+- **PHP Manager** — Multiple PHP versions, per-site PHP settings, php.ini editor
+- **SSL/TLS** — Let's Encrypt, self-signed, custom certificates with auto-renewal
+- **Webserver Rebuild** — Regenerate web server configuration files
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### User Accounts
+- **Account Management** — Create, edit, suspend, delete user accounts
+- **Hosting Packages** — Define resource limits (disk, bandwidth, databases, emails, etc.)
+- **Reseller Support** — Reseller-level account management
 
-## Learning Laravel
+### Email
+- **Email Accounts** — Create and manage mailboxes
+- **Forwarders & Autoresponders** — Email routing and automated replies
+- **DKIM & SPF** — Email authentication configuration
+- **Postfix & Dovecot** — Full mail server configuration
+- **Mail Queue** — View and manage the mail queue
+- **Email Statistics** — Daily and weekly email traffic reports
+- **Anti-Spam** — SpamAssassin, RBL, and custom spam filtering
+- **SpamExperts** — Integration with SpamExperts filtering
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+### DNS
+- **DNS Zone Editor** — Full DNS record management (A, AAAA, CNAME, MX, TXT, SRV, etc.)
+- **DNS Templates** — Reusable DNS zone templates
+- **Nameserver Configuration** — Custom nameserver setup
+- **DNS Cluster** — Multi-server DNS synchronization
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### Databases
+- **MySQL/MariaDB** — Database and user management, process viewer, status monitor
+- **phpMyAdmin** — Auto-login integration
+- **PostgreSQL** — Basic PostgreSQL management
+- **MongoDB** — MongoDB database management
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+### Backups
+- **Backup Manager** — Schedule and manage server backups
+- **Backup Configuration** — Per-account and full-server backup settings
+- **Backup Monitor** — Real-time backup job monitoring
+- **Remote Backups** — SSH/SFTP remote backup support
 
-## Agentic Development
+### Applications
+- **Node.js Manager** — Install, configure, and manage Node.js applications with NVM support
+- **File Manager** — Browser-based file management with editor
+- **Tomcat** — Apache Tomcat application server management
+- **Shoutcast** — Streaming server management
+- **TeamSpeak** — TeamSpeak server management
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+### Security
+- **CSF Firewall** — Full ConfigServer Security & Firewall integration
+- **IP Management** — Allow/block IP addresses, NAT configuration
+- **ModSecurity** — Web application firewall configuration
+- **cgroups** — Resource limiting per account
+- **Shell Access Control** — Manage SSH access per user
+- **Login Security** — Brute-force protection and rate limiting
+- **Malware Detection** — Maldet and RKHunter integration
+- **Lynis Security Auditing** — System security score
+- **Symlink Protection** — Prevent symlink attacks
+
+### Advanced
+- **Server Migration** — Transfer accounts from remote servers
+- **WHMCS Integration** — Billing platform bridge API
+- **API Access** — RESTful API for external integrations
+- **CloudLinux** — CloudLinux integration and management
+- **Cluster Management** — Multi-server cluster configuration
+- **Auto Updates** — Automatic system and panel updates
+- **Custom Hooks** — Pre/post action hook system
+- **Themes & Languages** — Customizable UI themes and i18n support
+- **Notifications** — System notification management
+- **Email Stats & Monitoring** — Servercast and messenger integrations
+
+## Requirements
+
+- **OS:** AlmaLinux 8/9, Rocky Linux 8/9, RHEL 8/9, CentOS 8/9, or Oracle Linux 8/9
+- **RAM:** Minimum 512 MB
+- **Disk:** Minimum 2 GB free on `/usr`
+- **Architecture:** x86_64
+- **Access:** Root SSH access
+
+## Quick Install
+
+### EL9 (AlmaLinux 9, Rocky 9, RHEL 9, Oracle Linux 9)
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+curl -O https://raw.githubusercontent.com/WebOpenPanel/openpanel/main/openpanel-el9
+bash openpanel-el9
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+### EL8 (AlmaLinux 8, Rocky 8, CentOS 8, Oracle Linux 8)
+
+```bash
+curl -O https://raw.githubusercontent.com/WebOpenPanel/openpanel/main/openpanel-el8
+bash openpanel-el8
+```
+
+### Universal Installer (auto-detects OS version)
+
+```bash
+curl -O https://raw.githubusercontent.com/WebOpenPanel/openpanel/main/install-openpanel.sh
+bash install-openpanel.sh
+```
+
+The installer will:
+1. Install PHP 8.3, Nginx, MariaDB, and all dependencies
+2. Clone OpenPanel from GitHub
+3. Configure the database and run migrations
+4. Generate an SSL certificate
+5. Configure Nginx on port **2087** with PHP-FPM
+6. Create an admin user and display credentials
+
+After installation, access the panel at: `https://your-server-ip:2087`
+
+Credentials are saved to `/root/.openpanel-credentials`.
+
+## Manual Install
+
+```bash
+# Clone the repository
+git clone https://github.com/WebOpenPanel/openpanel.git /usr/local/openpanel
+cd /usr/local/openpanel
+
+# Install dependencies
+composer install --no-dev --optimize-autoloader
+
+# Configure environment
+cp .env.example .env
+php artisan key:generate
+
+# Edit .env with your database credentials
+# DB_DATABASE=open_panel
+# DB_USERNAME=openpanel
+# DB_PASSWORD=your_password
+
+# Run migrations
+php artisan migrate
+
+# Create admin user
+php artisan tinker
+>>> \App\Models\User::create(['username' => 'admin', 'email' => 'admin@yourdomain.com', 'password' => bcrypt('your-password'), 'role' => 'admin', 'status' => 'active']);
+
+# Optimize
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+php artisan storage:link
+
+# Set permissions
+chown -R nginx:nginx storage bootstrap/cache
+chmod -R 775 storage bootstrap/cache
+```
+
+## Tech Stack
+
+- **Backend:** Laravel 13, PHP 8.3
+- **Frontend:** Tailwind CSS, Alpine.js, Vite
+- **Database:** MariaDB / MySQL
+- **Web Server:** Nginx with PHP-FPM
+- **OS Support:** EL8 and EL9 (AlmaLinux, Rocky, RHEL, CentOS, Oracle)
+
+## Project Structure
+
+```
+app/
+├── Http/
+│   ├── Controllers/    # 35+ controllers for all panel features
+│   └── Middleware/     # Auth, activity logging, admin checks
+├── Models/             # Eloquent models for all entities
+├── Providers/          # Service providers
+└── Services/           # 49 service classes (business logic)
+
+resources/views/        # Blade templates for all pages
+routes/web.php          # All panel routes
+database/
+├── migrations/         # Database schema
+└── seeders/            # Default data seeder
+
+openpanel-el9           # EL9 one-line installer
+openpanel-el8           # EL8 one-line installer
+install-openpanel.sh    # Universal installer
+```
 
 ## Contributing
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
-
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+Contributions are welcome. Please open an issue first to discuss what you would like to change.
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+OpenPanel is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
