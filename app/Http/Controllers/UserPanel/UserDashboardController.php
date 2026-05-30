@@ -10,7 +10,7 @@ class UserDashboardController extends Controller
 {
     public function index()
     {
-        $user = auth()->user();
+        $user = \Illuminate\Support\Facades\Auth::user();
         $username = $user->username;
 
         $diskUsed = trim(ShellService::exec("du -sm /home/{$username} 2>/dev/null | cut -f1") ?: '0');

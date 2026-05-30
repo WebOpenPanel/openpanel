@@ -3,14 +3,13 @@
 namespace App\Http\Controllers\UserPanel;
 
 use App\Http\Controllers\Controller;
-use App\Services\ShellService;
 use Illuminate\Http\Request;
 
 class UserCronController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     public function index()

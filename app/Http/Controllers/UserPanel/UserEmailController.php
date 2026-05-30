@@ -11,7 +11,7 @@ class UserEmailController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     public function index()
@@ -67,7 +67,6 @@ class UserEmailController extends Controller
         $quota = $request->quota ?? 250;
 
         $parts = explode('@', $email);
-        $mailUser = $parts[0];
         $domain = $parts[1] ?? '';
 
         $domainCheck = DB::connection('openpanel')->table('domains')

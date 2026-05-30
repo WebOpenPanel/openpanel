@@ -10,7 +10,7 @@ class UserFileController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     protected function homePath(): string

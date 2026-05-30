@@ -5,12 +5,13 @@ namespace App\Http\Controllers\UserPanel;
 use App\Http\Controllers\Controller;
 use App\Services\ShellService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Response;
 
 class UserBackupController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     public function index()
@@ -60,7 +61,7 @@ class UserBackupController extends Controller
             return back()->with('error', 'Backup file not found.');
         }
 
-        return response()->download($file);
+        return Response::download($file);
     }
 
     public function delete(Request $request)

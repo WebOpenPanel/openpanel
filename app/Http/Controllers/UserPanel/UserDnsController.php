@@ -11,7 +11,7 @@ class UserDnsController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     public function index()
@@ -24,7 +24,7 @@ class UserDnsController extends Controller
         return view('user-panel.dns.index', compact('domains'));
     }
 
-    public function show(Request $request, string $domain)
+    public function show(string $domain)
     {
         $username = $this->username();
         $owned = DB::connection('openpanel')->table('domains')

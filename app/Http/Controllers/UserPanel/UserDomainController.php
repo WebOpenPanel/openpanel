@@ -12,7 +12,7 @@ class UserDomainController extends Controller
 {
     protected function username(): string
     {
-        return auth()->user()->username;
+        return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
     public function index()
@@ -66,7 +66,7 @@ class UserDomainController extends Controller
             'created_at' => now(),
         ]);
 
-        WebServerService::rebuildVhosts();
+        WebServerService::rebuildAll();
 
         return back()->with('success', "Subdomain {$fullDomain} created.");
     }
@@ -85,7 +85,7 @@ class UserDomainController extends Controller
         }
 
         DB::connection('openpanel')->table('subdomains')->where('id', $request->id)->delete();
-        WebServerService::rebuildVhosts();
+        WebServerService::rebuildAll();
 
         return back()->with('success', 'Subdomain removed.');
     }
@@ -106,7 +106,7 @@ class UserDomainController extends Controller
             'created_at' => now(),
         ]);
 
-        WebServerService::rebuildVhosts();
+        WebServerService::rebuildAll();
 
         return back()->with('success', "Alias {$request->alias} added.");
     }
@@ -120,7 +120,7 @@ class UserDomainController extends Controller
             ->where('user', $this->username())
             ->delete();
 
-        WebServerService::rebuildVhosts();
+        WebServerService::rebuildAll();
 
         return back()->with('success', 'Alias removed.');
     }
