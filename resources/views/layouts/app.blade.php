@@ -111,6 +111,8 @@
                             <a href="{{ route('email.mx') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('email.mx') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">MX Routing</a>
                             <a href="{{ route('email.mail-log') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('email.mail-log') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Mail Log</a>
                             <a href="{{ route('email.postfix-config') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('email.postfix-config') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Postfix Config</a>
+                            <a href="{{ route('postfix-lists.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('postfix-lists.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Postfix Lists</a>
+                            <a href="{{ route('policyd.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('policyd.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Policyd / Rate Limits</a>
                         </div>
                     </div>
 
@@ -227,6 +229,92 @@
                         <span>Varnish Cache</span>
                     </a>
 
+                    <!-- Web Server -->
+                    <div x-data="{ open: {{ request()->is('webserver-templates*','webserver-wizard*') ? 'true' : 'false' }} }">
+                        <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-sitemap w-5 text-center mr-3"></i>
+                            <span class="flex-1 text-left">Web Server</span>
+                            <i class="fas fa-chevron-down text-xs transition-transform" :class="{ 'rotate-180': open }"></i>
+                        </button>
+                        <div x-show="open" x-collapse class="ml-5 mt-1 space-y-1">
+                            <a href="{{ route('webserver-templates.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('webserver-templates.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Vhost Templates</a>
+                            <a href="{{ route('webserver-wizard.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('webserver-wizard.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Setup Wizard</a>
+                        </div>
+                    </div>
+
+                    <!-- PHP Extensions -->
+                    <div x-data="{ open: {{ request()->is('pecl*','snuffleupagus*') ? 'true' : 'false' }} }">
+                        <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+                            <i class="fab fa-php w-5 text-center mr-3"></i>
+                            <span class="flex-1 text-left">PHP Extensions</span>
+                            <i class="fas fa-chevron-down text-xs transition-transform" :class="{ 'rotate-180': open }"></i>
+                        </button>
+                        <div x-show="open" x-collapse class="ml-5 mt-1 space-y-1">
+                            <a href="{{ route('pecl.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('pecl.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">PECL Manager</a>
+                            <a href="{{ route('snuffleupagus.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('snuffleupagus.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Snuffleupagus</a>
+                        </div>
+                    </div>
+
+                    <!-- Python Manager -->
+                    <a href="{{ route('python.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('python.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fab fa-python w-5 text-center mr-3"></i>
+                        <span>Python Manager</span>
+                    </a>
+
+                    <!-- Object Storage -->
+                    <a href="{{ route('object-storage.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('object-storage.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-cloud w-5 text-center mr-3"></i>
+                        <span>Object Storage</span>
+                    </a>
+
+                    <!-- Bandwidth Monitor -->
+                    <a href="{{ route('bandwidth.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('bandwidth.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-chart-bar w-5 text-center mr-3"></i>
+                        <span>Bandwidth Monitor</span>
+                    </a>
+
+                    <!-- RBL Check -->
+                    <a href="{{ route('rbl.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('rbl.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-ban w-5 text-center mr-3"></i>
+                        <span>RBL Check</span>
+                    </a>
+
+                    <!-- Web Scan -->
+                    <a href="{{ route('webscan.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('webscan.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-search w-5 text-center mr-3"></i>
+                        <span>Web Scan</span>
+                    </a>
+
+                    <!-- ClamAV -->
+                    <a href="{{ route('clamav.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('clamav.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-virus-slash w-5 text-center mr-3"></i>
+                        <span>ClamAV Scanner</span>
+                    </a>
+
+                    <!-- Incidents Log -->
+                    <a href="{{ route('incidents.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('incidents.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-exclamation-triangle w-5 text-center mr-3"></i>
+                        <span>Incidents Log</span>
+                    </a>
+
+                    <!-- Kernel Security -->
+                    <a href="{{ route('kernel-security.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('kernel-security.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-shield-alt w-5 text-center mr-3"></i>
+                        <span>Kernel Security</span>
+                    </a>
+
+                    <!-- Icecast -->
+                    <a href="{{ route('icecast.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('icecast.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-broadcast-tower w-5 text-center mr-3"></i>
+                        <span>Icecast</span>
+                    </a>
+
+                    <!-- Help Desk -->
+                    <a href="{{ route('helpdesk.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('helpdesk.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-headset w-5 text-center mr-3"></i>
+                        <span>Help Desk</span>
+                    </a>
+
                     <!-- Backups -->
                     <div x-data="{ open: {{ request()->is('backups*') ? 'true' : 'false' }} }">
                         <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
@@ -278,6 +366,11 @@
                     <a href="{{ route('ssl.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="SSL"><i class="fas fa-lock"></i></a>
                     <a href="{{ route('security.firewall') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Security"><i class="fas fa-shield-alt"></i></a>
                     <a href="{{ route('services.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Services"><i class="fas fa-cogs"></i></a>
+                    <a href="{{ route('varnish.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Varnish"><i class="fas fa-tachometer-alt"></i></a>
+                    <a href="{{ route('python.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Python"><i class="fab fa-python"></i></a>
+                    <a href="{{ route('pecl.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="PECL"><i class="fab fa-php"></i></a>
+                    <a href="{{ route('bandwidth.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Bandwidth"><i class="fas fa-chart-bar"></i></a>
+                    <a href="{{ route('clamav.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="ClamAV"><i class="fas fa-virus-slash"></i></a>
                     <a href="{{ route('backups.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Backups"><i class="fas fa-hdd"></i></a>
                     <a href="{{ route('settings.index') }}" class="flex items-center justify-center p-2.5 text-gray-700 rounded-lg hover:bg-gray-100" title="Settings"><i class="fas fa-cog"></i></a>
                 </div>

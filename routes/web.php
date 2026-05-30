@@ -37,6 +37,22 @@ use App\Http\Controllers\ApacheBuilderController;
 use App\Http\Controllers\ServiceMonitorController;
 use App\Http\Controllers\ClusterController;
 use App\Http\Controllers\WhmcsController;
+use App\Http\Controllers\PythonController;
+use App\Http\Controllers\PeclController;
+use App\Http\Controllers\ObjectStorageController;
+use App\Http\Controllers\BandwidthController;
+use App\Http\Controllers\RblController;
+use App\Http\Controllers\PolicydController;
+use App\Http\Controllers\SnuffleupagusController;
+use App\Http\Controllers\HelpDeskController;
+use App\Http\Controllers\IncidentsController;
+use App\Http\Controllers\WebServerTemplateController;
+use App\Http\Controllers\WebServerWizardController;
+use App\Http\Controllers\KernelSecurityController;
+use App\Http\Controllers\PostfixListController;
+use App\Http\Controllers\WebScanController;
+use App\Http\Controllers\ClamavController;
+use App\Http\Controllers\IcecastController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('login'));
@@ -529,6 +545,147 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
 
     // Webmail Auto-Login
     Route::post('/webmail-login', [\App\Http\Controllers\AutoLoginEmailController::class, 'webmailLogin'])->name('webmail-login');
+
+    // Python Manager
+    Route::prefix('python')->name('python.')->group(function () {
+        Route::get('/', [PythonController::class, 'index'])->name('index');
+        Route::post('/install', [PythonController::class, 'install'])->name('install');
+        Route::post('/remove', [PythonController::class, 'remove'])->name('remove');
+        Route::post('/set-user', [PythonController::class, 'setUserVersion'])->name('set-user');
+    });
+
+    // PHP PECL Extensions
+    Route::prefix('pecl')->name('pecl.')->group(function () {
+        Route::get('/', [PeclController::class, 'index'])->name('index');
+        Route::get('/search', [PeclController::class, 'search'])->name('search');
+        Route::post('/install', [PeclController::class, 'install'])->name('install');
+        Route::post('/uninstall', [PeclController::class, 'uninstall'])->name('uninstall');
+        Route::post('/toggle', [PeclController::class, 'toggle'])->name('toggle');
+    });
+
+    // Object Storage
+    Route::prefix('object-storage')->name('object-storage.')->group(function () {
+        Route::get('/', [ObjectStorageController::class, 'index'])->name('index');
+        Route::post('/save', [ObjectStorageController::class, 'save'])->name('save');
+        Route::post('/test', [ObjectStorageController::class, 'test'])->name('test');
+        Route::get('/buckets', [ObjectStorageController::class, 'listBuckets'])->name('buckets');
+    });
+
+    // Bandwidth Monitor
+    Route::prefix('bandwidth')->name('bandwidth.')->group(function () {
+        Route::get('/', [BandwidthController::class, 'index'])->name('index');
+        Route::get('/user', [BandwidthController::class, 'user'])->name('user');
+        Route::get('/interface', [BandwidthController::class, 'interface'])->name('interface');
+    });
+
+    // RBL Check
+    Route::prefix('rbl')->name('rbl.')->group(function () {
+        Route::get('/', [RblController::class, 'index'])->name('index');
+        Route::post('/check', [RblController::class, 'check'])->name('check');
+        Route::post('/check-all', [RblController::class, 'checkAll'])->name('check-all');
+        Route::post('/add', [RblController::class, 'addBlacklist'])->name('add');
+        Route::post('/remove', [RblController::class, 'removeBlacklist'])->name('remove');
+    });
+
+    // Policyd
+    Route::prefix('policyd')->name('policyd.')->group(function () {
+        Route::get('/', [PolicydController::class, 'index'])->name('index');
+        Route::post('/install', [PolicydController::class, 'install'])->name('install');
+        Route::post('/rate-limit', [PolicydController::class, 'addRateLimit'])->name('rate-limit');
+        Route::delete('/rate-limit/{id}', [PolicydController::class, 'removeRateLimit'])->name('rate-limit-delete');
+        Route::post('/toggle/{id}', [PolicydController::class, 'togglePolicy'])->name('toggle');
+        Route::post('/restart', [PolicydController::class, 'restart'])->name('restart');
+    });
+
+    // Snuffleupagus
+    Route::prefix('snuffleupagus')->name('snuffleupagus.')->group(function () {
+        Route::get('/', [SnuffleupagusController::class, 'index'])->name('index');
+        Route::post('/install', [SnuffleupagusController::class, 'install'])->name('install');
+        Route::post('/config', [SnuffleupagusController::class, 'saveConfig'])->name('config');
+        Route::post('/rules', [SnuffleupagusController::class, 'saveRules'])->name('rules');
+    });
+
+    // Help Desk
+    Route::prefix('helpdesk')->name('helpdesk.')->group(function () {
+        Route::get('/', [HelpDeskController::class, 'index'])->name('index');
+        Route::post('/save', [HelpDeskController::class, 'save'])->name('save');
+        Route::post('/install', [HelpDeskController::class, 'install'])->name('install');
+    });
+
+    // Incidents Log
+    Route::prefix('incidents')->name('incidents.')->group(function () {
+        Route::get('/', [IncidentsController::class, 'index'])->name('index');
+        Route::post('/scan', [IncidentsController::class, 'scan'])->name('scan');
+        Route::post('/{id}/resolve', [IncidentsController::class, 'resolve'])->name('resolve');
+        Route::delete('/{id}', [IncidentsController::class, 'destroy'])->name('destroy');
+        Route::post('/clear', [IncidentsController::class, 'clear'])->name('clear');
+    });
+
+    // Web Server Wizard
+    Route::prefix('webserver-wizard')->name('webserver-wizard.')->group(function () {
+        Route::get('/', [WebServerWizardController::class, 'index'])->name('index');
+        Route::post('/step/{step}', [WebServerWizardController::class, 'step'])->name('step');
+        Route::post('/finish', [WebServerWizardController::class, 'finish'])->name('finish');
+        Route::post('/reset', [WebServerWizardController::class, 'reset'])->name('reset');
+    });
+
+    // Web Server Templates
+    Route::prefix('webserver-templates')->name('webserver-templates.')->group(function () {
+        Route::get('/', [WebServerTemplateController::class, 'index'])->name('index');
+        Route::get('/create', [WebServerTemplateController::class, 'create'])->name('create');
+        Route::post('/save', [WebServerTemplateController::class, 'save'])->name('save');
+        Route::get('/{name}/edit', [WebServerTemplateController::class, 'edit'])->name('edit');
+        Route::delete('/{name}', [WebServerTemplateController::class, 'destroy'])->name('destroy');
+        Route::post('/generate', [WebServerTemplateController::class, 'generate'])->name('generate');
+    });
+
+    // Kernel Security
+    Route::prefix('kernel-security')->name('kernel-security.')->group(function () {
+        Route::get('/', [KernelSecurityController::class, 'index'])->name('index');
+        Route::post('/blacklist', [KernelSecurityController::class, 'blacklist'])->name('blacklist');
+        Route::post('/unblacklist', [KernelSecurityController::class, 'unblacklist'])->name('unblacklist');
+        Route::post('/harden', [KernelSecurityController::class, 'harden'])->name('harden');
+    });
+
+    // Postfix List Manager
+    Route::prefix('postfix-lists')->name('postfix-lists.')->group(function () {
+        Route::get('/', [PostfixListController::class, 'index'])->name('index');
+        Route::get('/{type}', [PostfixListController::class, 'show'])->name('show');
+        Route::post('/add', [PostfixListController::class, 'add'])->name('add');
+        Route::post('/remove', [PostfixListController::class, 'remove'])->name('remove');
+    });
+
+    // Web Scan
+    Route::prefix('webscan')->name('webscan.')->group(function () {
+        Route::get('/', [WebScanController::class, 'index'])->name('index');
+        Route::post('/scan', [WebScanController::class, 'scan'])->name('scan');
+        Route::get('/results/{domain}', [WebScanController::class, 'results'])->name('results');
+    });
+
+    // ClamAV
+    Route::prefix('clamav')->name('clamav.')->group(function () {
+        Route::get('/', [ClamavController::class, 'index'])->name('index');
+        Route::post('/install', [ClamavController::class, 'install'])->name('install');
+        Route::post('/update', [ClamavController::class, 'updateDefinitions'])->name('update');
+        Route::post('/scan-user', [ClamavController::class, 'scanUser'])->name('scan-user');
+        Route::post('/scan-all', [ClamavController::class, 'scanAll'])->name('scan-all');
+        Route::post('/scan-path', [ClamavController::class, 'scanPath'])->name('scan-path');
+        Route::post('/restore', [ClamavController::class, 'restore'])->name('restore');
+        Route::post('/delete', [ClamavController::class, 'deleteQuarantine'])->name('delete');
+        Route::post('/log', [ClamavController::class, 'viewLog'])->name('log');
+    });
+
+    // Icecast
+    Route::prefix('icecast')->name('icecast.')->group(function () {
+        Route::get('/', [IcecastController::class, 'index'])->name('index');
+        Route::post('/install', [IcecastController::class, 'install'])->name('install');
+        Route::post('/options', [IcecastController::class, 'saveOptions'])->name('options');
+        Route::post('/add', [IcecastController::class, 'addServer'])->name('add');
+        Route::delete('/{port}', [IcecastController::class, 'removeServer'])->name('remove');
+        Route::post('/{port}/start', [IcecastController::class, 'start'])->name('start');
+        Route::post('/{port}/stop', [IcecastController::class, 'stop'])->name('stop');
+        Route::post('/{port}/restart', [IcecastController::class, 'restart'])->name('restart');
+    });
 });
 
 // REST API (no CSRF, outside auth middleware)

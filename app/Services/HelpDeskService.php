@@ -2,67 +2,96 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\File;
+
 class HelpDeskService
 {
-    const HELPDESK_PATH = '/usr/local/openpanel/include/helpdesk/';
-
-    public static function isInstalled(): bool
-    {
-        return is_dir(self::HELPDESK_PATH);
-    }
-
-    public static function install(): bool
-    {
-        if (!is_dir(self::HELPDESK_PATH)) @mkdir(self::HELPDESK_PATH, 0755, true);
-        return true;
-    }
+    protected static string $configPath = '/usr/local/openpanel/.conf/helpdesk.json';
 
     public static function getConfig(): array
     {
-        $configFile = self::HELPDESK_PATH . 'config.json';
-        if (!file_exists($configFile)) return [];
-        return json_decode(file_get_contents($configFile), true) ?? [];
-    }
-
-    public static function saveConfig(array $config): bool
-    {
-        if (!is_dir(self::HELPDESK_PATH)) @mkdir(self::HELPDESK_PATH, 0755, true);
-        return file_put_contents(self::HELPDESK_PATH . 'config.json', json_encode($config, JSON_PRETTY_PRINT)) !== false;
-    }
-
-    public static function getTickets(): array
-    {
-        $config = self::getConfig();
-        return $config['tickets'] ?? [];
-    }
-
-    public static function addTicket(array $ticket): bool
-    {
-        $config = self::getConfig();
-        $config['tickets'] = $config['tickets'] ?? [];
-        $ticket['id'] = count($config['tickets']) + 1;
-        $ticket['created_at'] = date('Y-m-d H:i:s');
-        $ticket['status'] = 'open';
-        $config['tickets'][] = $ticket;
-        return self::saveConfig($config);
-    }
-
-    public static function updateTicket(int $id, array $data): bool
-    {
-        $config = self::getConfig();
-        foreach ($config['tickets'] ?? [] as &$ticket) {
-            if (($ticket['id'] ?? 0) === $id) {
-                $ticket = array_merge($ticket, $data);
-                break;
-            }
+        if (!file_exists(self::$configPath)) {
+            return self::getDefaultConfig();
         }
-        return self::saveConfig($config);
+        return json_decode(file_get_contents(self::$configPath), true) ?: self::getDefaultConfig();
     }
 
-    public static function deleteTicket(int $id): bool
+    public static function saveConfig(array $data): array
     {
-        $config = self::getConfig();
-        $config['tickets'] = array_filter($config['tickets'] ?? [], fn($t) => ($t['id'] ?? 0) !== $id);
-        return self::saveConfig($config);
+        File::ensureDirectoryExists(dirname(self::$configPath));
+        file_put_contents(self::$configPath, json_encode($data, JSON_PRETTY_PRINT));
+        return ['success' => true, 'message' => 'Help desk configuration saved.'];
+    }
+
+    public static function installPhpMyFAQ(): array
+    {
+        $docRoot = '/var/www/helpdesk';
+        File::ensureDirectoryExists($docRoot);
+        $output = ShellService::exec("cd /tmp && curl -sL https://github.com/thorsten/phpMyFAQ/releases/latest/download/phpMyFAQ-*.tar.gz | tar xz -C {$docRoot} --strip-components=1 2>&1");
+        ShellService::exec("chown -R nginx:nginx {$docRoot}");
+        return ['success' => is_dir($docRoot . '/admin'), 'message' => 'phpMyFAQ downloaded.', 'output' => $output];
+    }
+
+    public static function installOSTicket(): array
+    {
+        $docRoot = '/var/www/helpdesk';
+        File::ensureDirectoryExists($docRoot);
+        $output = ShellService::exec("cd /tmp && curl -sL https://github.com/osTicket/osTicket/releases/latest/download/osTicket-v*.tar.gz | tar xz -C {$docRoot} --strip-components=1 2>&1");
+        ShellService::exec("chown -R nginx:nginx {$docRoot}");
+        return ['success' => is_dir($docRoot . '/upload'), 'message' => 'osTicket downloaded.', 'output' => $output];
+    }
+
+    public static function installUVDesk(): array
+    {
+        $docRoot = '/var/www/helpdesk';
+        File::ensureDirectoryExists($docRoot);
+        $output = ShellService::exec("cd /tmp && curl -sL https://github.com/uvdesk/community-skeleton/releases/latest/download/uvdesk-community-v*.tar.gz | tar xz -C {$docRoot} --strip-components=1 2>&1");
+        ShellService::exec("chown -R nginx:nginx {$docRoot}");
+        return ['success' => is_dir($docRoot . '/config'), 'message' => 'UVdesk downloaded.', 'output' => $output];
+    }
+
+    public static function getAvailableSoftware(): array
+    {
+        return [
+            ['name' => 'phpMyFAQ', 'description' => 'FAQ system with powerful search', 'install' => 'installPhpMyFAQ'],
+            ['name' => 'osTicket', 'description' => 'Open source support ticket system', 'install' => 'installOSTicket'],
+            ['name' => 'UVdesk', 'description' => 'Open source helpdesk platform', 'install' => 'installUVDesk'],
+        ];
+    }
+
+    public static function generateNginxConfig(string $domain, string $docRoot = '/var/www/helpdesk'): string
+    {
+        return "server {
+    listen 80;
+    server_name {$domain};
+    root {$docRoot};
+    index index.php index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        fastcgi_pass unix:/var/run/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}";
+    }
+
+    protected static function getDefaultConfig(): array
+    {
+        return [
+            'enabled' => false,
+            'software' => '',
+            'domain' => '',
+            'doc_root' => '/var/www/helpdesk',
+            'admin_email' => '',
+            'installed' => false,
+        ];
     }
 }
