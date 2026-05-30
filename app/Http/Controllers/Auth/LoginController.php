@@ -11,7 +11,10 @@ class LoginController extends Controller
     public function showLoginForm()
     {
         if (Auth::check()) {
-            return redirect()->route('dashboard');
+            if (Auth::user()->isAdmin()) {
+                return redirect()->route('dashboard');
+            }
+            return redirect()->route('user.dashboard');
         }
         return view('auth.login');
     }
@@ -33,7 +36,11 @@ class LoginController extends Controller
                 return back()->withErrors(['username' => 'Your account has been suspended.']);
             }
 
-            return redirect()->intended(route('dashboard'));
+            if (auth()->user()->isAdmin()) {
+                return redirect()->intended(route('dashboard'));
+            }
+
+            return redirect()->intended(route('user.dashboard'));
         }
 
         return back()->withErrors([

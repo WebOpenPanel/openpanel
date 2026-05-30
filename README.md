@@ -86,6 +86,19 @@ OpenPanel is a modern, web-based server control panel built with Laravel. It pro
 - **Notifications** — System notification management
 - **Email Stats & Monitoring** — Servercast and messenger integrations
 
+### User Panel (Port 2083)
+- **User Dashboard** — Account overview, disk usage, resource stats
+- **Domain Management** — Add/remove subdomains, domain aliases
+- **Email Accounts** — Create mailboxes, forwarders, autoresponders
+- **MySQL Manager** — Create databases, users, assign privileges, phpMyAdmin
+- **File Manager** — Browse, edit, upload files with permission management
+- **FTP Accounts** — Create and manage FTP access per directory
+- **Cron Jobs** — User-level cron job management
+- **SSL Certificates** — Let's Encrypt and self-signed certificate generation
+- **DNS Zone Editor** — Manage DNS records for owned domains
+- **Statistics** — Disk usage breakdown, process count, login history
+- **Backups** — Create, download, restore, delete account backups
+
 ## Requirements
 
 ### Minimum (web hosting only, no email)
@@ -157,10 +170,10 @@ The installer will:
 2. Clone OpenPanel from GitHub
 3. Configure the database and run migrations
 4. Generate an SSL certificate
-5. Configure Nginx on port **2087** with PHP-FPM
+5. Configure Nginx on ports **2087** (admin) and **2083** (user) with PHP-FPM
 6. Create an admin user and display credentials
 
-After installation, access the panel at: `https://your-server-ip:2087`
+After installation, access the admin panel at: `https://your-server-ip:2087` and the user panel at: `https://your-server-ip:2083`
 
 Credentials are saved to `/root/.openpanel-credentials`.
 

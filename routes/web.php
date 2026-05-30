@@ -53,6 +53,17 @@ use App\Http\Controllers\PostfixListController;
 use App\Http\Controllers\WebScanController;
 use App\Http\Controllers\ClamavController;
 use App\Http\Controllers\IcecastController;
+use App\Http\Controllers\UserPanel\UserDashboardController;
+use App\Http\Controllers\UserPanel\UserDomainController;
+use App\Http\Controllers\UserPanel\UserEmailController;
+use App\Http\Controllers\UserPanel\UserMysqlController;
+use App\Http\Controllers\UserPanel\UserFileController;
+use App\Http\Controllers\UserPanel\UserFtpController;
+use App\Http\Controllers\UserPanel\UserCronController;
+use App\Http\Controllers\UserPanel\UserSslController;
+use App\Http\Controllers\UserPanel\UserDnsController;
+use App\Http\Controllers\UserPanel\UserStatsController;
+use App\Http\Controllers\UserPanel\UserBackupController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('login'));
@@ -691,3 +702,83 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
 // REST API (no CSRF, outside auth middleware)
 Route::any('/v1', [\App\Http\Controllers\LegacyApiController::class, 'handle']);
 Route::any('/v1/', [\App\Http\Controllers\LegacyApiController::class, 'handle']);
+
+// User Panel (port 2083) - accessible by both admin and regular users
+Route::middleware(['auth', \App\Http\Middleware\UserMiddleware::class])->prefix('user')->name('user.')->group(function () {
+    Route::get('/dashboard', [UserDashboardController::class, 'index'])->name('dashboard');
+
+    // Domains
+    Route::get('/domains', [UserDomainController::class, 'index'])->name('domains.index');
+    Route::get('/domains/subdomains', [UserDomainController::class, 'subdomains'])->name('domains.subdomains');
+    Route::get('/domains/aliases', [UserDomainController::class, 'aliases'])->name('domains.aliases');
+    Route::post('/domains/subdomain/add', [UserDomainController::class, 'addSubdomain'])->name('domains.subdomain.add');
+    Route::post('/domains/subdomain/remove', [UserDomainController::class, 'removeSubdomain'])->name('domains.subdomain.remove');
+    Route::post('/domains/alias/add', [UserDomainController::class, 'addAlias'])->name('domains.alias.add');
+    Route::post('/domains/alias/remove', [UserDomainController::class, 'removeAlias'])->name('domains.alias.remove');
+
+    // Email
+    Route::get('/email', [UserEmailController::class, 'index'])->name('email.index');
+    Route::get('/email/forwarders', [UserEmailController::class, 'forwarders'])->name('email.forwarders');
+    Route::get('/email/autoresponders', [UserEmailController::class, 'autoresponders'])->name('email.autoresponders');
+    Route::post('/email/create', [UserEmailController::class, 'createAccount'])->name('email.create');
+    Route::post('/email/delete', [UserEmailController::class, 'deleteAccount'])->name('email.delete');
+    Route::post('/email/forwarder/create', [UserEmailController::class, 'createForwarder'])->name('email.forwarder.create');
+    Route::post('/email/forwarder/delete', [UserEmailController::class, 'deleteForwarder'])->name('email.forwarder.delete');
+    Route::post('/email/autoresponder/create', [UserEmailController::class, 'createAutoresponder'])->name('email.autoresponder.create');
+    Route::post('/email/autoresponder/delete', [UserEmailController::class, 'deleteAutoresponder'])->name('email.autoresponder.delete');
+
+    // MySQL
+    Route::get('/mysql', [UserMysqlController::class, 'index'])->name('mysql.index');
+    Route::get('/mysql/phpmyadmin', [UserMysqlController::class, 'phpmyadmin'])->name('mysql.phpmyadmin');
+    Route::post('/mysql/database/create', [UserMysqlController::class, 'createDatabase'])->name('mysql.database.create');
+    Route::post('/mysql/database/delete', [UserMysqlController::class, 'deleteDatabase'])->name('mysql.database.delete');
+    Route::post('/mysql/user/create', [UserMysqlController::class, 'createUser'])->name('mysql.user.create');
+    Route::post('/mysql/user/delete', [UserMysqlController::class, 'deleteUser'])->name('mysql.user.delete');
+    Route::post('/mysql/assign', [UserMysqlController::class, 'assignUser'])->name('mysql.assign');
+    Route::post('/mysql/revoke', [UserMysqlController::class, 'revokeUser'])->name('mysql.revoke');
+    Route::post('/mysql/password', [UserMysqlController::class, 'changePassword'])->name('mysql.password');
+
+    // phpMyAdmin shortcut
+    Route::get('/phpmyadmin', [UserMysqlController::class, 'phpmyadmin'])->name('phpmyadmin');
+
+    // Files
+    Route::get('/files', [UserFileController::class, 'index'])->name('files.index');
+    Route::get('/files/read', [UserFileController::class, 'readFile'])->name('files.read');
+    Route::post('/files/save', [UserFileController::class, 'saveFile'])->name('files.save');
+    Route::post('/files/mkdir', [UserFileController::class, 'createDirectory'])->name('files.mkdir');
+    Route::post('/files/delete', [UserFileController::class, 'delete'])->name('files.delete');
+    Route::post('/files/chmod', [UserFileController::class, 'changePermissions'])->name('files.chmod');
+
+    // FTP
+    Route::get('/ftp', [UserFtpController::class, 'index'])->name('ftp.index');
+    Route::post('/ftp/create', [UserFtpController::class, 'create'])->name('ftp.create');
+    Route::post('/ftp/delete', [UserFtpController::class, 'delete'])->name('ftp.delete');
+    Route::post('/ftp/password', [UserFtpController::class, 'changePassword'])->name('ftp.password');
+
+    // Cron
+    Route::get('/cron', [UserCronController::class, 'index'])->name('cron.index');
+    Route::post('/cron/store', [UserCronController::class, 'store'])->name('cron.store');
+    Route::post('/cron/destroy', [UserCronController::class, 'destroy'])->name('cron.destroy');
+
+    // SSL
+    Route::get('/ssl', [UserSslController::class, 'index'])->name('ssl.index');
+    Route::get('/ssl/generate', [UserSslController::class, 'generate'])->name('ssl.generate');
+    Route::post('/ssl/request', [UserSslController::class, 'requestCert'])->name('ssl.request');
+    Route::post('/ssl/selfsigned', [UserSslController::class, 'selfSigned'])->name('ssl.selfsigned');
+
+    // DNS
+    Route::get('/dns', [UserDnsController::class, 'index'])->name('dns.index');
+    Route::get('/dns/{domain}', [UserDnsController::class, 'show'])->name('dns.show');
+    Route::post('/dns/record/add', [UserDnsController::class, 'addRecord'])->name('dns.record.add');
+    Route::post('/dns/record/delete', [UserDnsController::class, 'deleteRecord'])->name('dns.record.delete');
+
+    // Stats
+    Route::get('/stats', [UserStatsController::class, 'index'])->name('stats.index');
+
+    // Backups
+    Route::get('/backups', [UserBackupController::class, 'index'])->name('backups.index');
+    Route::post('/backups/create', [UserBackupController::class, 'create'])->name('backups.create');
+    Route::get('/backups/download', [UserBackupController::class, 'download'])->name('backups.download');
+    Route::post('/backups/restore', [UserBackupController::class, 'restore'])->name('backups.restore');
+    Route::post('/backups/delete', [UserBackupController::class, 'delete'])->name('backups.delete');
+});

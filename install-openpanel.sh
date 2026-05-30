@@ -457,6 +457,57 @@ server {
 }
 EONGX
 
+    cat > /etc/nginx/conf.d/openpanel-user.conf <<'EONGX2'
+server {
+    listen 2083 ssl http2;
+    listen [::]:2083 ssl http2;
+    server_name _;
+
+    root /usr/local/openpanel/public;
+    index index.php;
+
+    ssl_certificate /etc/pki/tls/certs/openpanel.crt;
+    ssl_certificate_key /etc/pki/tls/private/openpanel.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    client_max_body_size 256M;
+    client_body_timeout 300;
+    client_header_timeout 300;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript;
+    gzip_min_length 1000;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php-fpm/www.sock;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_read_timeout 300;
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+}
+EONGX2
+
     # Configure PHP-FPM
     if [ -f /etc/php-fpm.d/www.conf ]; then
         sed -i 's/^user = apache/user = nginx/' /etc/php-fpm.d/www.conf
@@ -592,7 +643,8 @@ save_credentials() {
 # Generated: $(date)
 # ====================================
 
-Panel URL:      https://${SERVER_IP}:2087
+Panel URL (Admin): https://${SERVER_IP}:2087
+Panel URL (User):  https://${SERVER_IP}:2083
 Admin User:     ${ADMIN_USER}
 Admin Email:    ${ADMIN_EMAIL}
 Admin Password: ${ADMIN_PASSWORD}
@@ -618,7 +670,8 @@ print_summary() {
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║           OpenPanel Installation Complete!                   ║${NC}"
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║${NC}  Panel URL:      ${BLUE}https://${SERVER_IP}:2087${NC}"
+    echo -e "${GREEN}║${NC}  Admin Panel:    ${BLUE}https://${SERVER_IP}:2087${NC}"
+    echo -e "${GREEN}║${NC}  User Panel:     ${BLUE}https://${SERVER_IP}:2083${NC}"
     echo -e "${GREEN}║${NC}  Admin User:     ${YELLOW}${ADMIN_USER}${NC}"
     echo -e "${GREEN}║${NC}  Admin Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
     echo -e "${GREEN}║${NC}"
