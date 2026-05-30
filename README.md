@@ -88,9 +88,44 @@ OpenPanel is a modern, web-based server control panel built with Laravel. It pro
 
 ## Requirements
 
+### Minimum (web hosting only, no email)
+| Resource | Value | Breakdown |
+|----------|-------|-----------|
+| RAM | 1 GB | OS ~200 MB, MariaDB ~256 MB, Nginx ~30 MB, PHP-FPM ~40 MB, CSF ~50 MB, BIND ~30 MB, Panel ~30 MB |
+| Disk | 15 GB | OS ~4 GB, MariaDB data ~2 GB, panel + vendor ~500 MB, swap ~1 GB, logs + user data ~7 GB |
+
+### Recommended (web + email hosting)
+| Resource | Value | Breakdown |
+|----------|-------|-----------|
+| RAM | 4 GB | Above + Postfix ~50 MB, Dovecot ~50 MB, SpamAssassin ~150 MB, ClamAV ~400 MB, Varnish ~256 MB, headroom |
+| Disk | 40 GB | Above + ClamAV signatures ~300 MB, mail storage, backups, additional headroom |
+
+### Full Stack (all services enabled)
+| Resource | Value | Breakdown |
+|----------|-------|-----------|
+| RAM | 8 GB | All services + multiple PHP-FPM pools, Node.js apps, Tomcat, Icecast, safety margin |
+| Disk | 80 GB | All services + large mail queues, backup storage, application data |
+
+### Service Memory Footprint Reference
+| Service | Typical RAM | Notes |
+|---------|-------------|-------|
+| OS + systemd | 200 MB | Base EL8/EL9 install |
+| MariaDB | 256 MB – 1 GB | Default `innodb_buffer_pool_size=128M`, scales with data |
+| Nginx | 20 – 50 MB | Scales with connections |
+| Apache (if used) | 50 – 200 MB | Only in Nginx+Apache stack |
+| PHP-FPM | 30 – 50 MB per pool | One pool per PHP version in use |
+| CSF / LFD | 40 – 100 MB | Firewall + login failure daemon |
+| Postfix | 30 – 50 MB | SMTP server |
+| Dovecot | 30 – 50 MB | IMAP/POP3 server |
+| SpamAssassin | 100 – 200 MB | Spam filtering |
+| ClamAV | 300 – 500 MB | Virus signatures alone ~200 MB |
+| Varnish | 256 MB | Default malloc cache size |
+| BIND / Named | 30 – 80 MB | DNS server |
+| Pure-FTPd | 10 – 20 MB | FTP server |
+| OpenPanel | 30 – 60 MB | Laravel PHP-FPM pool |
+
+### Other
 - **OS:** AlmaLinux 8/9, Rocky Linux 8/9, RHEL 8/9, CentOS 8/9, or Oracle Linux 8/9
-- **RAM:** Minimum 2 GB (4 GB+ recommended; MySQL/MariaDB buffer pool alone consumes ~1 GB, plus Nginx, PHP-FPM, CSF, and the panel itself)
-- **Disk:** Minimum 10 GB free on `/usr`
 - **Architecture:** x86_64
 - **Access:** Root SSH access
 
