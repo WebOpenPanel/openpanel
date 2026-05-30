@@ -18,6 +18,7 @@ OpenPanel is a modern, web-based server control panel built with Laravel. It pro
 
 ### Web Server
 - **Nginx & Apache** — Manage virtual hosts, rebuild configs
+- **Varnish Cache** — Full Varnish HTTP accelerator management (install, configure, VCL editor, cache purge)
 - **PHP Manager** — Multiple PHP versions, per-site PHP settings, php.ini editor
 - **SSL/TLS** — Let's Encrypt, self-signed, custom certificates with auto-renewal
 - **Webserver Rebuild** — Regenerate web server configuration files

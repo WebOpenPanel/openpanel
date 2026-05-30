@@ -22,6 +22,7 @@ use App\Http\Controllers\IpController;
 use App\Http\Controllers\NodejsController;
 use App\Http\Controllers\ApiController;
 use App\Http\Controllers\TomcatController;
+use App\Http\Controllers\VarnishController;
 use App\Http\Controllers\MonitController;
 use App\Http\Controllers\MigrationController;
 use App\Http\Controllers\NotificationController;
@@ -357,6 +358,19 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::delete('/user', [TomcatController::class, 'deleteUser'])->name('delete-user');
         Route::post('/deploy', [TomcatController::class, 'deploy'])->name('deploy');
         Route::delete('/undeploy', [TomcatController::class, 'undeploy'])->name('undeploy');
+    });
+
+    // Varnish Cache
+    Route::prefix('varnish')->name('varnish.')->group(function () {
+        Route::get('/', [VarnishController::class, 'index'])->name('index');
+        Route::post('/install', [VarnishController::class, 'install'])->name('install');
+        Route::post('/uninstall', [VarnishController::class, 'uninstall'])->name('uninstall');
+        Route::post('/start', [VarnishController::class, 'start'])->name('start');
+        Route::post('/stop', [VarnishController::class, 'stop'])->name('stop');
+        Route::post('/restart', [VarnishController::class, 'restart'])->name('restart');
+        Route::post('/config', [VarnishController::class, 'saveConfig'])->name('config');
+        Route::post('/vcl', [VarnishController::class, 'saveVcl'])->name('vcl');
+        Route::post('/clear-cache', [VarnishController::class, 'clearCache'])->name('clear-cache');
     });
 
     // Monit

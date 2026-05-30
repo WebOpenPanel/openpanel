@@ -221,6 +221,12 @@
                         <span>Services</span>
                     </a>
 
+                    <!-- Varnish -->
+                    <a href="{{ route('varnish.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('varnish.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-tachometer-alt w-5 text-center mr-3"></i>
+                        <span>Varnish Cache</span>
+                    </a>
+
                     <!-- Backups -->
                     <div x-data="{ open: {{ request()->is('backups*') ? 'true' : 'false' }} }">
                         <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
