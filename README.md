@@ -89,8 +89,8 @@ OpenPanel is a modern, web-based server control panel built with Laravel. It pro
 ## Requirements
 
 - **OS:** AlmaLinux 8/9, Rocky Linux 8/9, RHEL 8/9, CentOS 8/9, or Oracle Linux 8/9
-- **RAM:** Minimum 512 MB
-- **Disk:** Minimum 2 GB free on `/usr`
+- **RAM:** Minimum 2 GB (4 GB+ recommended; MySQL/MariaDB buffer pool alone consumes ~1 GB, plus Nginx, PHP-FPM, CSF, and the panel itself)
+- **Disk:** Minimum 10 GB free on `/usr`
 - **Architecture:** x86_64
 - **Access:** Root SSH access
 
