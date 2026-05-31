@@ -22,14 +22,14 @@
                 <form method="POST" action="{{ route('login') }}" class="space-y-5">
                     @csrf
                     <div>
-                        <label for="username" class="block text-sm font-medium text-gray-700 mb-1.5">Username or Email</label>
+                        <label for="username" class="block text-sm font-medium text-gray-700 mb-1.5">Username</label>
                         <div class="relative">
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                 <i class="fas fa-user text-gray-400"></i>
                             </div>
                             <input type="text" name="username" id="username" value="{{ old('username') }}" required autofocus
                                 class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm @error('username') border-red-500 @enderror"
-                                placeholder="Enter username or email">
+                                placeholder="Linux username">
                         </div>
                         @error('username')
                             <p class="mt-1 text-sm text-red-600">{{ $message }}</p>

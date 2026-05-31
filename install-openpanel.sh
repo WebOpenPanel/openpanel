@@ -282,7 +282,7 @@ install_nodejs() {
 
 install_base_packages() {
     step "Installing Base Packages"
-    dnf -y install git curl wget unzip tar 2>&1 | tee -a "$LOG_FILE"
+    dnf -y install git curl wget unzip tar gcc 2>&1 | tee -a "$LOG_FILE"
     log "Base packages installed"
 }
 
@@ -378,6 +378,21 @@ create_admin_user() {
     fi
 
     log "Admin user is root (uid 0) — authenticated via /etc/shadow"
+}
+
+build_auth_helper() {
+    step "Building Auth Helper"
+
+    mkdir -p "$INSTALL_DIR/bin"
+
+    if [ -f "$INSTALL_DIR/bin/auth-check.c" ]; then
+        gcc -o "$INSTALL_DIR/bin/auth-check" "$INSTALL_DIR/bin/auth-check.c" -lcrypt 2>&1 | tee -a "$LOG_FILE"
+        chown root:root "$INSTALL_DIR/bin/auth-check"
+        chmod 4755 "$INSTALL_DIR/bin/auth-check"
+        log "Auth helper compiled and setuid root"
+    else
+        log "WARNING: auth-check.c not found, login will not work"
+    fi
 }
 
 build_assets() {
@@ -686,6 +701,7 @@ main() {
         configure_env
         run_migrations
         create_admin_user
+        build_auth_helper
         build_assets
         generate_ssl
         configure_nginx

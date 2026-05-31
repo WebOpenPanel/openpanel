@@ -53,20 +53,34 @@ class LinuxAuthUser implements Authenticatable
 
     public static function verifyPassword(string $username, string $password): bool
     {
-        if (!file_exists('/etc/shadow')) return false;
-
-        $lines = file('/etc/shadow', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            $parts = explode(':', $line);
-            if ($parts[0] === $username && count($parts) >= 2) {
-                $hash = $parts[1];
-                if ($hash === '!!' || $hash === '!' || $hash === '*' || $hash === '') {
-                    return false;
-                }
-                return password_verify($password, $hash) || crypt($password, $hash) === $hash;
-            }
+        $helper = '/usr/local/openpanel/bin/auth-check';
+        if (!file_exists($helper)) {
+            return false;
         }
-        return false;
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = proc_open(
+            [$helper, $username, $password],
+            $descriptors,
+            $pipes,
+            '/'
+        );
+
+        if (!is_resource($process)) {
+            return false;
+        }
+
+        fclose($pipes[0]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        $exitCode = proc_close($process);
+        return $exitCode === 0;
     }
 
     public static function isRootOrSudo(string $username): bool
@@ -91,14 +105,7 @@ class LinuxAuthUser implements Authenticatable
 
     public function getAuthPassword(): string
     {
-        $lines = file('/etc/shadow', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        foreach ($lines as $line) {
-            $parts = explode(':', $line);
-            if ($parts[0] === $this->username) {
-                return $parts[1] ?? '';
-            }
-        }
-        return '';
+        return 'verified-via-helper';
     }
 
     public function getAuthPasswordName(): string
