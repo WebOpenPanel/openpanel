@@ -122,9 +122,6 @@ gather_config() {
     read -p "Enable SSL for panel? (Y/n): " ENABLE_SSL
     ENABLE_SSL="${ENABLE_SSL:-Y}"
 
-    read -p "Install CSF firewall? (Y/n): " INSTALL_CSF
-    INSTALL_CSF="${INSTALL_CSF:-Y}"
-
     read -p "Install mail server (Postfix/Dovecot)? (Y/n): " INSTALL_MAIL
     INSTALL_MAIL="${INSTALL_MAIL:-Y}"
 
@@ -588,32 +585,6 @@ optimize_app() {
     log "Application optimized"
 }
 
-install_csf() {
-    if [[ ! "$INSTALL_CSF" =~ ^[Yy]$ ]]; then
-        return
-    fi
-
-    step "Installing CSF Firewall"
-
-    dnf -y install perl-File-Find perl-libwww-perl perl-Time-HiRes perl-GDGraph perl-Net-SSLeay perl-IO-Socket-SSL perl-LWP-Protocol-https 2>&1 | tee -a "$LOG_FILE"
-
-    cd /tmp
-    rm -rf csf csf.tgz
-    wget -q https://download.configserver.com/csf.tgz 2>&1 | tee -a "$LOG_FILE"
-    tar -xzf csf.tgz
-    cd csf
-    sh install.sh 2>&1 | tee -a "$LOG_FILE"
-
-    sed -i 's|TESTING = "1"|TESTING = "0"|' /etc/csf/csf.conf
-    sed -i "s|80,110,113,443|80,110,113,443,2087,2083,2096|" /etc/csf/csf.conf
-
-    csf -r 2>&1 | tee -a "$LOG_FILE"
-    cd /
-    rm -rf /tmp/csf /tmp/csf.tgz
-
-    log "CSF Firewall installed and configured"
-}
-
 install_mail() {
     if [[ ! "$INSTALL_MAIL" =~ ^[Yy]$ ]]; then
         return
@@ -733,7 +704,6 @@ main() {
         configure_nginx
         setup_cron
         optimize_app
-        install_csf
         install_mail
         save_credentials
     } 2>&1 | tee -a "$LOG_FILE"
