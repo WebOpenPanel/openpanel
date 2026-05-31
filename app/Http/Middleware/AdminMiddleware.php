@@ -18,7 +18,14 @@ class AdminMiddleware
 
         $user = Auth::user();
 
-        if (!$user instanceof LinuxAuthUser || !$user->isAdmin()) {
+        if (!$user instanceof LinuxAuthUser) {
+            Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+            return redirect()->route('login');
+        }
+
+        if (!$user->isAdmin()) {
             abort(403, 'Access denied. Root or sudo user required.');
         }
 
