@@ -599,7 +599,7 @@ install_csf() {
 
     cd /tmp
     rm -rf csf csf.tgz
-    wget -q http://static.cdn-cwp.com/files/csf.tgz 2>&1 | tee -a "$LOG_FILE"
+    wget -q https://download.configserver.com/csf.tgz 2>&1 | tee -a "$LOG_FILE"
     tar -xzf csf.tgz
     cd csf
     sh install.sh 2>&1 | tee -a "$LOG_FILE"
