@@ -166,7 +166,7 @@ bash install-openpanel.sh
 ```
 
 The installer will:
-1. Install PHP 8.3, Nginx, MariaDB, and all dependencies
+1. Install PHP 8.4, Nginx, MariaDB, and all dependencies
 2. Clone OpenPanel from GitHub
 3. Configure the database and run migrations
 4. Generate an SSL certificate
@@ -216,7 +216,7 @@ chmod -R 775 storage bootstrap/cache
 
 ## Tech Stack
 
-- **Backend:** Laravel 13, PHP 8.3
+- **Backend:** Laravel 13, PHP 8.4
 - **Frontend:** Tailwind CSS, Alpine.js, Vite
 - **Database:** MariaDB / MySQL
 - **Web Server:** Nginx with PHP-FPM

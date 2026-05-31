@@ -6,7 +6,7 @@ export LANG
 
 GITHUB_REPO="https://github.com/WebOpenPanel/openpanel.git"
 INSTALL_DIR="/usr/local/openpanel"
-PHP_VERSION="8.3"
+PHP_VERSION="8.4"
 DB_NAME="open_panel"
 DB_USER="openpanel"
 LOG_FILE="/tmp/openpanel-install.log"
