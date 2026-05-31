@@ -11,10 +11,12 @@ class SeparateSessionPerPort
     public function handle(Request $request, Closure $next): Response
     {
         $port = $request->getPort();
-        $cookieName = config('session.cookie');
+        $baseCookie = config('session.cookie');
 
         if ($port === 2083) {
-            config(['session.cookie' => $cookieName . '_user']);
+            config(['session.cookie' => $baseCookie . '_user']);
+        } else {
+            config(['session.cookie' => $baseCookie . '_admin']);
         }
 
         return $next($request);

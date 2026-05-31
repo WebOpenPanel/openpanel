@@ -26,7 +26,10 @@ class AdminMiddleware
         }
 
         if (!$user->isAdmin()) {
-            abort(403, 'Access denied. Root or sudo user required.');
+            Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+            return redirect('https://' . $request->getHost() . ':2083/login');
         }
 
         return $next($request);
