@@ -595,6 +595,8 @@ install_csf() {
 
     step "Installing CSF Firewall"
 
+    dnf -y install perl-File-Find perl-libwww-perl perl-Time-HiRes perl-GDGraph perl-Net-SSLeay perl-IO-Socket-SSL perl-LWP-Protocol-https 2>&1 | tee -a "$LOG_FILE"
+
     cd /tmp
     rm -rf csf csf.tgz
     wget -q http://static.cdn-cwp.com/files/csf.tgz 2>&1 | tee -a "$LOG_FILE"
