@@ -100,17 +100,11 @@ gather_config() {
 
     DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
 
-    read -p "Admin username [admin]: " ADMIN_USER
-    ADMIN_USER="${ADMIN_USER:-admin}"
-
-    read -p "Admin email [admin@$(hostname -f 2>/dev/null || hostname)]: " ADMIN_EMAIL
-    ADMIN_EMAIL="${ADMIN_EMAIL:-admin@$(hostname -f 2>/dev/null || hostname)}"
-
-    read -s -p "Admin password (leave blank to auto-generate): " ADMIN_PASSWORD
+    read -p "Set root password for admin panel (leave blank to keep current): " ROOT_PASSWORD
     echo ""
-    if [ -z "$ADMIN_PASSWORD" ]; then
-        ADMIN_PASSWORD=$(openssl rand -base64 12 | tr -dc A-Za-z0-9 | head -c 16)
-        log "Generated admin password: $ADMIN_PASSWORD"
+    if [ -n "$ROOT_PASSWORD" ]; then
+        echo "root:${ROOT_PASSWORD}" | chpasswd 2>&1
+        log "Root password updated"
     fi
 
     read -p "Server IP (auto-detected): " SERVER_IP
@@ -130,6 +124,9 @@ gather_config() {
 }
 
 install_repos() {
+    step "Updating System Packages"
+    dnf -y update 2>&1 | tee -a "$LOG_FILE"
+
     step "Configuring Repositories"
 
     dnf -y install epel-release 2>&1 | tee -a "$LOG_FILE"
@@ -373,23 +370,14 @@ run_migrations() {
 }
 
 create_admin_user() {
-    step "Creating Admin User"
+    step "Verifying Admin Access"
 
-    cd "$INSTALL_DIR"
-    php artisan tinker --execute="
-        \\App\\Models\\User::updateOrCreate(
-            ['username' => '${ADMIN_USER}'],
-            [
-                'email' => '${ADMIN_EMAIL}',
-                'password' => bcrypt('${ADMIN_PASSWORD}'),
-                'role' => 'admin',
-                'status' => 'active',
-                'ip_address' => '${SERVER_IP}',
-            ]
-        );
-    " 2>&1 | tee -a "$LOG_FILE"
+    if ! id -u root &>/dev/null; then
+        log "ERROR: root user not found"
+        exit 1
+    fi
 
-    log "Admin user '$ADMIN_USER' created"
+    log "Admin user is root (uid 0) — authenticated via /etc/shadow"
 }
 
 build_assets() {
@@ -624,9 +612,8 @@ save_credentials() {
 
 Panel URL (Admin): https://${SERVER_IP}:2087
 Panel URL (User):  https://${SERVER_IP}:2083
-Admin User:     ${ADMIN_USER}
-Admin Email:    ${ADMIN_EMAIL}
-Admin Password: ${ADMIN_PASSWORD}
+Admin User:     root (Linux root user)
+Admin Password: (your root password — use 'passwd root' to change)
 
 MySQL Root Password: ${MYSQL_ROOT_PASSWORD}
 OpenPanel DB User:    ${DB_USER}
@@ -651,8 +638,8 @@ print_summary() {
     echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}║${NC}  Admin Panel:    ${BLUE}https://${SERVER_IP}:2087${NC}"
     echo -e "${GREEN}║${NC}  User Panel:     ${BLUE}https://${SERVER_IP}:2083${NC}"
-    echo -e "${GREEN}║${NC}  Admin User:     ${YELLOW}${ADMIN_USER}${NC}"
-    echo -e "${GREEN}║${NC}  Admin Password: ${YELLOW}${ADMIN_PASSWORD}${NC}"
+    echo -e "${GREEN}║${NC}  Admin User:     ${YELLOW}root${NC} (Linux root user)"
+    echo -e "${GREEN}║${NC}  Admin Password: ${YELLOW}(your root password)${NC}"
     echo -e "${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  MySQL Root Pwd: ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
     echo -e "${GREEN}║${NC}  DB User:      ${YELLOW}${DB_USER}${NC}"

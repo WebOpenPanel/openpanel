@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\LinuxAuthUser;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -15,9 +16,11 @@ class UserMiddleware
             return redirect()->route('login');
         }
 
-        if (Auth::user()->status === 'suspended') {
+        $user = Auth::user();
+
+        if (!$user instanceof LinuxAuthUser) {
             Auth::logout();
-            return redirect()->route('login')->withErrors(['username' => 'Your account has been suspended.']);
+            return redirect()->route('login');
         }
 
         return $next($request);

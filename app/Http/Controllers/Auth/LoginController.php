@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\LinuxAuthUser;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -11,7 +12,8 @@ class LoginController extends Controller
     public function showLoginForm()
     {
         if (Auth::check()) {
-            if (Auth::user()->isAdmin()) {
+            $user = Auth::user();
+            if ($user instanceof LinuxAuthUser && $user->isAdmin()) {
                 return redirect()->route('dashboard');
             }
             return redirect()->route('user.dashboard');
@@ -26,26 +28,29 @@ class LoginController extends Controller
             'password' => 'required|string',
         ]);
 
-        $field = filter_var($credentials['username'], FILTER_VALIDATE_EMAIL) ? 'email' : 'username';
+        $username = $credentials['username'];
 
-        if (Auth::attempt([$field => $credentials['username'], 'password' => $credentials['password']], $request->boolean('remember'))) {
-            $request->session()->regenerate();
-
-            if (auth()->user()->status === 'suspended') {
-                Auth::logout();
-                return back()->withErrors(['username' => 'Your account has been suspended.']);
-            }
-
-            if (auth()->user()->isAdmin()) {
-                return redirect()->intended(route('dashboard'));
-            }
-
-            return redirect()->intended(route('user.dashboard'));
+        $linuxUser = LinuxAuthUser::findByUsername($username);
+        if (!$linuxUser) {
+            return back()->withErrors([
+                'username' => 'User does not exist on this server.',
+            ])->onlyInput('username');
         }
 
-        return back()->withErrors([
-            'username' => 'The provided credentials do not match our records.',
-        ])->onlyInput('username');
+        if (!LinuxAuthUser::verifyPassword($username, $credentials['password'])) {
+            return back()->withErrors([
+                'username' => 'Invalid password.',
+            ])->onlyInput('username');
+        }
+
+        Auth::login($linuxUser);
+        $request->session()->regenerate();
+
+        if ($linuxUser->isAdmin()) {
+            return redirect()->intended(route('dashboard'));
+        }
+
+        return redirect()->intended(route('user.dashboard'));
     }
 
     public function logout(Request $request)

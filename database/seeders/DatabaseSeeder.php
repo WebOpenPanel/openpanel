@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
 use App\Models\Package;
 use App\Models\Service;
 use Illuminate\Database\Seeder;
@@ -11,22 +10,7 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        $adminUser = env('ADMIN_USER', 'admin');
-        $adminEmail = env('ADMIN_EMAIL', 'admin@openpanel.local');
-        $adminPassword = env('ADMIN_PASSWORD', 'admin123');
-
-        User::updateOrCreate(
-            ['username' => $adminUser],
-            [
-                'email' => $adminEmail,
-                'password' => bcrypt($adminPassword),
-                'role' => 'admin',
-                'status' => 'active',
-                'ip_address' => '127.0.0.1',
-            ]
-        );
-
-        $default = Package::create([
+        Package::create([
             'name' => 'Default',
             'description' => 'Default hosting package',
             'disk_space_mb' => 5120,
