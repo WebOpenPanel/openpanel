@@ -286,6 +286,12 @@ install_nodejs() {
     fi
 }
 
+install_base_packages() {
+    step "Installing Base Packages"
+    dnf -y install git curl wget unzip tar 2>&1 | tee -a "$LOG_FILE"
+    log "Base packages installed"
+}
+
 clone_project() {
     step "Installing OpenPanel"
 
@@ -710,6 +716,7 @@ main() {
 
     {
         install_repos
+        install_base_packages
         install_php
         install_nginx
         install_mariadb
