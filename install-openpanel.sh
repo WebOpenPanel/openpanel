@@ -121,7 +121,7 @@ check_existing() {
     fi
 
     if [ -e "/usr/local/cwpsrv/" ]; then
-        warn "Legacy CWP detected at /usr/local/cwpsrv/. OpenPanel will be installed alongside."
+        warn "Legacy panel detected at /usr/local/cwpsrv/. OpenPanel will be installed alongside."
         if [[ "${NON_INTERACTIVE:-}" != "y" ]]; then
             read -p "Continue? (y/N): " confirm
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then

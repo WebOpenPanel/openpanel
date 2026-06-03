@@ -16,7 +16,7 @@
                         <i class="fas fa-server text-white text-2xl"></i>
                     </div>
                     <h2 class="text-2xl font-bold text-gray-900">OpenPanel</h2>
-                    <p class="text-sm text-gray-500 mt-1">Control Web Panel</p>
+                    <p class="text-sm text-gray-500 mt-1">OpenPanel</p>
                 </div>
 
                 <form method="POST" action="{{ route('login') }}" class="space-y-5">

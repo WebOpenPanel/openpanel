@@ -1075,8 +1075,8 @@ class WebServerService
             }
         }
 
-        ShellService::exec("openssl req -new -newkey rsa:{$keySize} -nodes -keyout " . self::SSL_PRIVATE_DIR . "/hostname.key -subj '/C=HR/ST=Zagreb/O=CentOS Web Panel/L=HR/CN={$hostname}/OU=CentOS Web Panel/emailAddress=info@centos-webpanel.com' -out " . self::SSL_CERTS_DIR . "/hostname.csr");
-        ShellService::exec("openssl req -new -key " . self::SSL_PRIVATE_DIR . "/hostname.key -subj '/C=HR/ST=Zagreb/O=CentOS Web Panel/L=HR/CN={$hostname}/OU=CentOS Web Panel/emailAddress=info@centos-webpanel.com' -x509 -days 365 -out " . self::SSL_CERTS_DIR . "/hostname.bundle");
+        ShellService::exec("openssl req -new -newkey rsa:{$keySize} -nodes -keyout " . self::SSL_PRIVATE_DIR . "/hostname.key -subj '/C=US/ST=California/O=OpenPanel/L=San Francisco/CN={$hostname}/OU=OpenPanel/emailAddress=admin@openpanel.com' -out " . self::SSL_CERTS_DIR . "/hostname.csr");
+        ShellService::exec("openssl req -new -key " . self::SSL_PRIVATE_DIR . "/hostname.key -subj '/C=US/ST=California/O=OpenPanel/L=San Francisco/CN={$hostname}/OU=OpenPanel/emailAddress=admin@openpanel.com' -x509 -days 365 -out " . self::SSL_CERTS_DIR . "/hostname.bundle");
 
         if (file_exists(self::SSL_CERTS_DIR . '/hostname.bundle') && file_exists(self::SSL_PRIVATE_DIR . '/hostname.key')) {
             ShellService::exec("cat " . self::SSL_PRIVATE_DIR . "/hostname.key > " . self::SSL_PRIVATE_DIR . "/hostname.pem; cat " . self::SSL_CERTS_DIR . "/hostname.bundle >> " . self::SSL_PRIVATE_DIR . "/hostname.pem");
