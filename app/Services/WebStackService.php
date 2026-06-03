@@ -376,19 +376,19 @@ class WebStackService
     {
         switch ($stack) {
             case 'nginx_phpfpm':
-                Process::run("rm -f /etc/nginx/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/nginx/conf.d/users/{$username}.conf");
                 break;
             case 'apache_phpfpm':
-                Process::run("rm -f /etc/httpd/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/httpd/conf.d/users/{$username}.conf");
                 break;
             case 'nginx_apache':
-                Process::run("rm -f /etc/nginx/conf.d/users/{$username}.conf");
-                Process::run("rm -f /etc/httpd/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/nginx/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/httpd/conf.d/users/{$username}.conf");
                 break;
             case 'nginx_varnish_apache':
-                Process::run("rm -f /etc/nginx/conf.d/users/{$username}.conf");
-                Process::run("rm -f /etc/httpd/conf.d/users/{$username}.conf");
-                Process::run("rm -f /etc/varnish/conf.d/users/{$username}.vcl");
+                Process::run("sudo rm -f /etc/nginx/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/httpd/conf.d/users/{$username}.conf");
+                Process::run("sudo rm -f /etc/varnish/conf.d/users/{$username}.vcl");
                 break;
         }
     }
@@ -413,8 +413,11 @@ class WebStackService
         $result = ['stack' => $stack, 'actions' => [], 'success' => true];
 
         // 1. Write suspended state marker
-        Process::run("mkdir -p /etc/openpanel/suspended");
-        file_put_contents("/etc/openpanel/suspended/{$domain}", $username);
+        Process::run("sudo mkdir -p /etc/openpanel/suspended");
+        $tmp = tempnam(sys_get_temp_dir(), 'susp');
+        file_put_contents($tmp, $username);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/openpanel/suspended/{$domain}");
+        @unlink($tmp);
         $result['actions'][] = 'suspended_marker_written';
 
         // 2. Write nginx 403 vhost to conf.d/ directly (always included)
@@ -448,7 +451,10 @@ server {
 NGINX;
 
         $suspendConfPath = "/etc/nginx/conf.d/suspended-{$username}.conf";
-        file_put_contents($suspendConfPath, $suspendedVhost);
+        $tmp = tempnam(sys_get_temp_dir(), 'sus');
+        file_put_contents($tmp, $suspendedVhost);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($suspendConfPath));
+        @unlink($tmp);
         $result['actions'][] = 'nginx_suspended_vhost_written';
 
         // 3. For apache-based stacks: replace Apache vhost with 403
@@ -472,9 +478,12 @@ NGINX;
 APACHE;
 
             if (file_exists($apacheVhostPath)) {
-                Process::run("cp {$apacheVhostPath} {$apacheBackupPath}");
+                Process::run("sudo cp {$apacheVhostPath} {$apacheBackupPath}");
             }
-            file_put_contents($apacheVhostPath, $suspendedApache);
+            $tmp = tempnam(sys_get_temp_dir(), 'asus');
+            file_put_contents($tmp, $suspendedApache);
+            Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($apacheVhostPath));
+            @unlink($tmp);
             $result['actions'][] = 'apache_suspended_vhost_written';
 
             $apachectl = Process::run("apachectl -t 2>&1");
@@ -483,7 +492,7 @@ APACHE;
                 $result['actions'][] = 'apache_reloaded';
             } else {
                 if (file_exists($apacheBackupPath)) {
-                    Process::run("cp {$apacheBackupPath} {$apacheVhostPath}");
+                    Process::run("sudo cp {$apacheBackupPath} {$apacheVhostPath}");
                 }
                 $result['actions'][] = 'apache_config_failed_rolled_back';
             }
@@ -533,8 +542,8 @@ APACHE;
             $apacheBackupPath = "/etc/httpd/conf.d/users/{$username}.conf.suspended";
 
             if (file_exists($apacheBackupPath)) {
-                Process::run("cp {$apacheBackupPath} {$apacheVhostPath}");
-                Process::run("rm -f {$apacheBackupPath}");
+                Process::run("sudo cp {$apacheBackupPath} {$apacheVhostPath}");
+                Process::run("sudo rm -f {$apacheBackupPath}");
                 $result['actions'][] = 'apache_vhost_restored';
             } else {
                 // No backup — regenerate from account data
@@ -658,8 +667,11 @@ server {
 }
 NGINX;
 
-        Process::run("mkdir -p /etc/nginx/conf.d/users");
-        Process::run("cat > /etc/nginx/conf.d/users/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
+        Process::run("sudo mkdir -p /etc/nginx/conf.d/users");
+        $tmp = tempnam(sys_get_temp_dir(), 'ngx');
+        file_put_contents($tmp, $vhost);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/nginx/conf.d/users/{$username}.conf");
+        @unlink($tmp);
     }
 
     protected function generateApachePhpfpmVhost(string $username, string $domain, string $home, int $port = 80): void
@@ -706,8 +718,11 @@ NGINX;
 </VirtualHost>
 APACHE;
 
-        Process::run("mkdir -p /etc/httpd/conf.d/users");
-        Process::run("cat > /etc/httpd/conf.d/users/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
+        Process::run("sudo mkdir -p /etc/httpd/conf.d/users");
+        $tmp = tempnam(sys_get_temp_dir(), 'apa');
+        file_put_contents($tmp, $vhost);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/httpd/conf.d/users/{$username}.conf");
+        @unlink($tmp);
     }
 
     protected function generateNginxProxyVhost(string $username, string $domain, string $home, int $backendPort): void
@@ -751,8 +766,11 @@ server {
 }
 NGINX;
 
-        Process::run("mkdir -p /etc/nginx/conf.d/users");
-        Process::run("cat > /etc/nginx/conf.d/users/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
+        Process::run("sudo mkdir -p /etc/nginx/conf.d/users");
+        $tmp = tempnam(sys_get_temp_dir(), 'ngx');
+        file_put_contents($tmp, $vhost);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/nginx/conf.d/users/{$username}.conf");
+        @unlink($tmp);
     }
 
     protected function generateVarnishVhost(string $username, string $domain, int $backendPort): void
@@ -792,8 +810,11 @@ sub vcl_backend_response {
 }
 VCL;
 
-        Process::run("mkdir -p /etc/varnish/conf.d/users");
-        Process::run("cat > /etc/varnish/conf.d/users/{$username}.vcl <<'VCLEOF'\n{$vcl}\nVCLEOF");
+        Process::run("sudo mkdir -p /etc/varnish/conf.d/users");
+        $tmp = tempnam(sys_get_temp_dir(), 'vcl');
+        file_put_contents($tmp, $vcl);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/varnish/conf.d/users/{$username}.vcl");
+        @unlink($tmp);
     }
 
     protected function generateStackConfigs(string $stack): void
@@ -813,18 +834,18 @@ VCL;
 
     protected function configureApachePhpfpm(): void
     {
-        Process::run("mkdir -p /etc/httpd/conf.d/users");
+        Process::run("sudo mkdir -p /etc/httpd/conf.d/users");
 
         $include = 'IncludeOptional conf.d/users/*.conf';
-        $result = Process::run("grep -q 'conf.d/users' /etc/httpd/conf/httpd.conf 2>/dev/null");
+        $result = Process::run("sudo grep -q 'conf.d/users' /etc/httpd/conf/httpd.conf 2>/dev/null");
         if ($result->failed()) {
-            Process::run("echo '{$include}' >> /etc/httpd/conf/httpd.conf");
+            Process::run("sudo bash -c " . escapeshellarg("echo '{$include}' >> /etc/httpd/conf/httpd.conf"));
         }
 
-        Process::run("usermod -aG nginx apache 2>/dev/null");
+        Process::run("sudo usermod -aG nginx apache 2>/dev/null");
 
-        if (!Process::run("grep -q 'include=/etc/php-fpm.d/users' /etc/php-fpm.conf 2>/dev/null")->successful()) {
-            Process::run("echo 'include=/etc/php-fpm.d/users/*.conf' >> /etc/php-fpm.conf");
+        if (!Process::run("sudo grep -q 'include=/etc/php-fpm.d/users' /etc/php-fpm.conf 2>/dev/null")->successful()) {
+            Process::run("sudo bash -c " . escapeshellarg("echo 'include=/etc/php-fpm.d/users/*.conf' >> /etc/php-fpm.conf"));
         }
 
         Process::run("systemctl enable httpd php-fpm");
@@ -854,7 +875,10 @@ sub vcl_recv {
     set req.http.X-Forwarded-For = client.ip;
 }
 VCL;
-            Process::run("cat > {$vclPath} <<'VCLEOF'\n{$defaultVcl}\nVCLEOF");
+            $tmp = tempnam(sys_get_temp_dir(), 'dvcl');
+            file_put_contents($tmp, $defaultVcl);
+            Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($vclPath));
+            @unlink($tmp);
         }
 
         Process::run("systemctl enable varnish");
@@ -912,7 +936,7 @@ VCL;
     protected function backupCurrentConfig(): void
     {
         $backupDir = $this->backupDir . '/' . date('Y-m-d_His');
-        Process::run("mkdir -p {$backupDir}");
+        Process::run("sudo mkdir -p {$backupDir}");
 
         $dirs = [
             '/etc/nginx/conf.d' => 'nginx_conf_d',
@@ -923,11 +947,11 @@ VCL;
 
         foreach ($dirs as $src => $dest) {
             if (is_dir($src)) {
-                Process::run("cp -r {$src} {$backupDir}/{$dest} 2>/dev/null");
+                Process::run("sudo cp -r {$src} {$backupDir}/{$dest} 2>/dev/null");
             }
         }
 
-        Process::run("ln -sfn {$backupDir} {$this->backupDir}/latest");
+        Process::run("sudo ln -sfn {$backupDir} {$this->backupDir}/latest");
     }
 
     protected function restoreConfig(string $backupDir): void
@@ -946,7 +970,7 @@ VCL;
 
         foreach ($map as $src => $dest) {
             if (is_dir($src)) {
-                Process::run("rm -rf {$dest} && cp -r {$src} {$dest} 2>/dev/null");
+                Process::run("sudo rm -rf {$dest} && sudo cp -r {$src} {$dest} 2>/dev/null");
             }
         }
     }

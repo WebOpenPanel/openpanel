@@ -360,6 +360,8 @@ done");
         }
 
         Process::run("/usr/bin/chown {$username}:{$username} {$home}");
+        // Set home to 711 immediately so runAsUser can cd into it later
+        Process::run("/usr/bin/chmod 711 {$home}");
     }
 
     /**
@@ -506,14 +508,17 @@ ftp     IN  A       {$ip}
 @       IN  TXT     "v=spf1 +a +mx +ip4:{$ip} ~all"
 BIND;
 
-        Process::run("cat > {$zoneFile} <<'ZONEEOF'\n{$zone}\nZONEEOF");
-        Process::run("chown named:named {$zoneFile}");
+        $tmp = tempnam(sys_get_temp_dir(), 'dns');
+        file_put_contents($tmp, $zone);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " {$zoneFile}");
+        Process::run("sudo chown named:named {$zoneFile}");
+        @unlink($tmp);
     }
 
     protected function removeDnsZone(string $username, string $domain): void
     {
         $zoneFile = "{$this->dnsZoneDir}/{$domain}.db";
-        Process::run("rm -f {$zoneFile}");
+        Process::run("sudo rm -f {$zoneFile}");
     }
 
     protected function createNginxVhost(string $username, string $domain): void
@@ -525,7 +530,7 @@ BIND;
 
     protected function removeNginxVhost(string $username): void
     {
-        Process::run("rm -f {$this->nginxVhostDir}/{$username}.conf");
+        Process::run("sudo rm -f {$this->nginxVhostDir}/{$username}.conf");
     }
 
     protected function createPhpFpmPool(string $username): void
@@ -570,13 +575,16 @@ php_value[post_max_size] = 64M
 php_value[max_file_uploads] = 20
 FPM;
 
-        Process::run("mkdir -p {$this->phpFpmPoolDir}");
-        Process::run("cat > {$this->phpFpmPoolDir}/{$username}.conf <<'PMEOF'\n{$pool}\nPMEOF");
+        Process::run("sudo mkdir -p {$this->phpFpmPoolDir}");
+        $tmp = tempnam(sys_get_temp_dir(), 'fpm');
+        file_put_contents($tmp, $pool);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " {$this->phpFpmPoolDir}/{$username}.conf");
+        @unlink($tmp);
     }
 
     protected function removePhpFpmPool(string $username): void
     {
-        Process::run("rm -f {$this->phpFpmPoolDir}/{$username}.conf");
+        Process::run("sudo rm -f {$this->phpFpmPoolDir}/{$username}.conf");
     }
 
     protected function createEmailDomain(string $username, string $domain): void
