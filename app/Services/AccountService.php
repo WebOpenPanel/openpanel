@@ -52,7 +52,8 @@ class AccountService
         $this->recordInDatabase($username, $domain, $ip, $email, $package, $disk, $bandwidth);
 
         // Apply resource limits from package (cgroups, nproc, disk quotas)
-        ResourceControlService::applyForUser($username, $package);
+        // Wrapped in try-catch — resource limits are best-effort, don't block account creation
+        try { ResourceControlService::applyForUser($username, $package); } catch (\Throwable $e) {}
         $this->reloadServices();
 
         return [

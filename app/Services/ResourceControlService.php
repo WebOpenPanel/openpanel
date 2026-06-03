@@ -21,31 +21,45 @@ class ResourceControlService
     {
         $package = $packageName ? Package::where('name', $packageName)->first() : null;
         $actions = [];
+        $errors = [];
 
         // 1. Process/file limits (always applied — safe defaults even without package)
-        $nproc = $package?->nproc ?? 100;
-        $nofile = $package?->nofile ?? 256;
-        self::setLimitsConfig($username, (int) $nproc, (int) $nofile);
-        $actions[] = "limits_set_nproc_{$nproc}_nofile_{$nofile}";
+        try {
+            $nproc = $package?->nproc ?? 100;
+            $nofile = $package?->nofile ?? 256;
+            self::setLimitsConfig($username, (int) $nproc, (int) $nofile);
+            $actions[] = "limits_set_nproc_{$nproc}_nofile_{$nofile}";
+        } catch (\Throwable $e) {
+            $errors[] = 'limits: ' . $e->getMessage();
+        }
 
         // 2. cgroups v2 limits (if cgroups v2 available and package specifies)
-        if ($package && self::isCgroupsV2Available()) {
-            if (!empty($package->cgroups)) {
-                self::applyCgroupLimits($username, $package);
-                $actions[] = 'cgroups_applied';
+        try {
+            if ($package && self::isCgroupsV2Available()) {
+                if (!empty($package->cgroups)) {
+                    self::applyCgroupLimits($username, $package);
+                    $actions[] = 'cgroups_applied';
+                }
             }
+        } catch (\Throwable $e) {
+            $errors[] = 'cgroups: ' . $e->getMessage();
         }
 
         // 3. Disk quota (if XFS with project quota support)
-        if ($package && $package->disk_space_mb > 0 && self::isQuotaSupported()) {
-            self::setDiskQuota($username, (int) $package->disk_space_mb);
-            $actions[] = "quota_set_{$package->disk_space_mb}MB";
+        try {
+            if ($package && $package->disk_space_mb > 0 && self::isQuotaSupported()) {
+                self::setDiskQuota($username, (int) $package->disk_space_mb);
+                $actions[] = "quota_set_{$package->disk_space_mb}MB";
+            }
+        } catch (\Throwable $e) {
+            $errors[] = 'quota: ' . $e->getMessage();
         }
 
         return [
             'username' => $username,
             'package' => $packageName ?? 'default',
             'actions' => $actions,
+            'errors' => $errors,
         ];
     }
 
@@ -115,7 +129,11 @@ class ResourceControlService
 {$username}  hard  core    0
 CONF;
 
-        file_put_contents("/etc/security/limits.d/90-{$username}.conf", $conf);
+        // Write via temp file + sudo cp (API runs as unprivileged user)
+        $tmp = tempnam(sys_get_temp_dir(), 'limits');
+        file_put_contents($tmp, $conf);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/security/limits.d/90-{$username}.conf");
+        @unlink($tmp);
     }
 
     // =========================================================================
@@ -179,19 +197,26 @@ CONF;
         $quotaFile = "/etc/projects/{$project}";
         $mapFile = "/etc/projid/{$project}";
 
-        // Register project
-        @mkdir('/etc/projects', 0755, true);
-        @mkdir('/etc/projid', 0755, true);
+        // Register project (use sudo for privileged dirs)
+        Process::run("sudo mkdir -p /etc/projects /etc/projid 2>/dev/null || true");
 
         // Find a unique project ID (hash of username)
         $projId = 10000 + (crc32($username) % 50000);
-        file_put_contents($mapFile, "{$project}:{$projId}\n");
-        file_put_contents($quotaFile, "{$projId}:{$home}\n");
+
+        $tmpMap = tempnam(sys_get_temp_dir(), 'qm');
+        file_put_contents($tmpMap, "{$project}:{$projId}\n");
+        Process::run("sudo cp " . escapeshellarg($tmpMap) . " " . escapeshellarg($mapFile));
+        @unlink($tmpMap);
+
+        $tmpProj = tempnam(sys_get_temp_dir(), 'qp');
+        file_put_contents($tmpProj, "{$projId}:{$home}\n");
+        Process::run("sudo cp " . escapeshellarg($tmpProj) . " " . escapeshellarg($quotaFile));
+        @unlink($tmpProj);
 
         // Apply quota (blocks: 1 block = 1KB on XFS)
         $blocks = $mb * 1024;
-        Process::run("xfs_quota -x -c 'project -s {$project}' /home 2>/dev/null || true");
-        Process::run("xfs_quota -x -c 'limit -p bsoft={$blocks}k bhard={$blocks}k {$project}' /home 2>/dev/null || true");
+        Process::run("sudo xfs_quota -x -c 'project -s {$project}' /home 2>/dev/null || true");
+        Process::run("sudo xfs_quota -x -c 'limit -p bsoft={$blocks}k bhard={$blocks}k {$project}' /home 2>/dev/null || true");
     }
 
     protected static function getDiskQuotaMb(string $username): int
