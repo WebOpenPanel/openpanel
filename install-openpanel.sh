@@ -99,8 +99,28 @@ gather_config() {
     echo ""
 
     if [[ "${NON_INTERACTIVE:-}" == "y" ]]; then
-        MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)}"
-        DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+        # On re-run, preserve existing passwords from .env
+        if [ -f "$INSTALL_DIR/.env" ]; then
+            local existing_db_pass
+            existing_db_pass=$(grep '^DB_PASSWORD=' "$INSTALL_DIR/.env" | cut -d= -f2 | tr -d '"' | tr -d "'")
+            local existing_root_pass
+            existing_root_pass=$(grep '^MYSQL_ROOT_PASSWORD=' "$INSTALL_DIR/.env" | cut -d= -f2 | tr -d '"' | tr -d "'" 2>/dev/null)
+            if [ -n "$existing_db_pass" ]; then
+                DB_PASSWORD="$existing_db_pass"
+                log "Preserved existing DB_PASSWORD from .env"
+            else
+                DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+            fi
+            if [ -n "$existing_root_pass" ]; then
+                MYSQL_ROOT_PASSWORD="$existing_root_pass"
+                log "Preserved existing MYSQL_ROOT_PASSWORD from .env"
+            else
+                MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)}"
+            fi
+        else
+            MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)}"
+            DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+        fi
         ROOT_PASSWORD="${ROOT_PASSWORD:-}"
         SERVER_IP="${SERVER_IP:-$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)}"
         ENABLE_SSL="${ENABLE_SSL:-Y}"
@@ -237,14 +257,26 @@ install_mariadb() {
     fi
 
     if mysqladmin -u root status &>/dev/null 2>&1; then
-        # Switch from unix_socket to password auth (AlmaLinux 9 default)
+        # Root has no password yet (fresh install) — switch from unix_socket to password auth
         mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password;" 2>&1 | tee -a "$LOG_FILE"
         mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>&1 | tee -a "$LOG_FILE"
         log "MySQL root password set"
+    elif mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" &>/dev/null 2>&1; then
+        log "MySQL root password already set and verified"
     else
-        log "MySQL root password already set, verifying..."
-        if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" &>/dev/null; then
-            err "Cannot connect to MySQL with provided password"
+        # Password mismatch on re-run — try to recover using .my.cnf or socket
+        warn "MySQL root password mismatch, attempting recovery..."
+        if [ -f /root/.my.cnf ]; then
+            local cnf_pass
+            cnf_pass=$(grep '^password=' /root/.my.cnf | cut -d= -f2)
+            if [ -n "$cnf_pass" ] && mysql -u root -p"$cnf_pass" -e "SELECT 1;" &>/dev/null 2>&1; then
+                mysql -u root -p"$cnf_pass" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';" 2>&1 | tee -a "$LOG_FILE"
+                log "Recovered MySQL root password from .my.cnf"
+            fi
+        fi
+        # Final verification
+        if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" &>/dev/null 2>&1; then
+            warn "Cannot verify MySQL root password — DB operations may fail"
         fi
     fi
 
