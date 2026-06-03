@@ -34,7 +34,20 @@ class WebStackService
     public function getActiveStack(): string
     {
         $settings = DB::connection('mysql')->table('web_stack_settings')->first();
-        return $settings ? $settings->active_stack : 'nginx_phpfpm';
+        if ($settings && $settings->active_stack) {
+            return $settings->active_stack;
+        }
+
+        // Fallback: check installer-written file
+        $stackFile = '/etc/openpanel/web_stack';
+        if (file_exists($stackFile)) {
+            $fileStack = trim(file_get_contents($stackFile));
+            if (isset(self::STACKS[$fileStack])) {
+                return $fileStack;
+            }
+        }
+
+        return 'nginx_phpfpm';
     }
 
     public function getStackConfig(): ?object
@@ -391,7 +404,8 @@ class WebStackService
 
     /**
      * Suspend a domain: stack-aware 403 block + Varnish ban.
-     * Centralized suspension logic called by AccountService and WordPressService.
+     * Writes suspended vhost to /etc/nginx/conf.d/ (not users/) so it's always
+     * included by nginx.conf. A specific server_name match beats server_name _.
      */
     public function suspendDomain(string $username, string $domain): array
     {
@@ -403,14 +417,12 @@ class WebStackService
         file_put_contents("/etc/openpanel/suspended/{$domain}", $username);
         $result['actions'][] = 'suspended_marker_written';
 
-        // 2. Backup and replace nginx vhost with 403
-        $nginxVhostPath = "/etc/nginx/conf.d/users/{$username}.conf";
-        $nginxBackupPath = "/etc/nginx/conf.d/users/{$username}.conf.suspended";
-
-        // Build SSL block only if cert exists
-        $sslBlock = '';
+        // 2. Write nginx 403 vhost to conf.d/ directly (always included)
+        //    This uses specific server_name which takes priority over catch-all server_name _
         $certPath = '/etc/pki/tls/certs/openpanel.crt';
         $keyPath = '/etc/pki/tls/private/openpanel.key';
+
+        $sslBlock = '';
         if (file_exists($certPath) && file_exists($keyPath)) {
             $sslBlock = <<<NGINX
 
@@ -435,22 +447,18 @@ server {
 {$sslBlock}
 NGINX;
 
-        if (file_exists($nginxVhostPath)) {
-            Process::run("cp {$nginxVhostPath} {$nginxBackupPath}");
-        }
-        file_put_contents($nginxVhostPath, $suspendedVhost);
+        $suspendConfPath = "/etc/nginx/conf.d/suspended-{$username}.conf";
+        file_put_contents($suspendConfPath, $suspendedVhost);
         $result['actions'][] = 'nginx_suspended_vhost_written';
 
-        // 3. For apache-based stacks: write 403 Apache vhost
+        // 3. For apache-based stacks: replace Apache vhost with 403
         if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'])) {
             $apacheVhostPath = "/etc/httpd/conf.d/users/{$username}.conf";
             $apacheBackupPath = "/etc/httpd/conf.d/users/{$username}.conf.suspended";
 
             $apachePort = ($stack === 'nginx_apache' || $stack === 'nginx_varnish_apache') ? 8080 : 80;
-            $listenDirective = $apachePort !== 80 ? "Listen {$apachePort}" : '';
 
             $suspendedApache = <<<APACHE
-{$listenDirective}
 <VirtualHost *:{$apachePort}>
     ServerName {$domain}
     ServerAlias www.{$domain}
@@ -483,12 +491,9 @@ APACHE;
 
         // 4. For varnish stacks: ban all cached content for this domain
         if (in_array($stack, ['nginx_varnish_apache', 'nginx_apache'])) {
-            $banResult = Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
-            $result['actions'][] = $banResult->successful() ? 'varnish_ban_ok' : 'varnish_ban_failed';
-
+            Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
             Process::run("varnishadm 'ban req.http.host == \"www.{$domain}\"' 2>&1");
-            // Also do a broad URL ban as defense-in-depth
-            Process::run("varnishadm 'ban req.url ~ \"{$domain}\"' 2>&1");
+            $result['actions'][] = 'varnish_ban_executed';
         }
 
         // 5. Test and reload nginx
@@ -497,10 +502,7 @@ APACHE;
             Process::run("systemctl reload nginx");
             $result['actions'][] = 'nginx_reloaded';
         } else {
-            // Rollback nginx
-            if (file_exists($nginxBackupPath)) {
-                Process::run("cp {$nginxBackupPath} {$nginxVhostPath}");
-            }
+            @unlink($suspendConfPath);
             $result['success'] = false;
             $result['actions'][] = 'nginx_config_failed_rolled_back';
         }
@@ -509,7 +511,7 @@ APACHE;
     }
 
     /**
-     * Unsuspend a domain: restore vhosts + purge stale Varnish 403.
+     * Unsuspend a domain: remove 403 block + restore vhosts + purge Varnish.
      */
     public function unsuspendDomain(string $username, string $domain): array
     {
@@ -520,26 +522,10 @@ APACHE;
         @unlink("/etc/openpanel/suspended/{$domain}");
         $result['actions'][] = 'suspended_marker_removed';
 
-        // 2. Restore nginx vhost
-        $nginxVhostPath = "/etc/nginx/conf.d/users/{$username}.conf";
-        $nginxBackupPath = "/etc/nginx/conf.d/users/{$username}.conf.suspended";
-
-        if (file_exists($nginxBackupPath)) {
-            Process::run("cp {$nginxBackupPath} {$nginxVhostPath}");
-            Process::run("rm -f {$nginxBackupPath}");
-            $result['actions'][] = 'nginx_vhost_restored';
-        } else {
-            $account = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
-            if ($account) {
-                $home = "/home/{$username}";
-                $this->generateVhostForDomain($stack, $username, $domain, $home);
-                $result['actions'][] = 'nginx_vhost_regenerated';
-            } else {
-                $result['success'] = false;
-                $result['actions'][] = 'no_backup_no_account';
-                return $result;
-            }
-        }
+        // 2. Remove nginx suspended vhost
+        $suspendConfPath = "/etc/nginx/conf.d/suspended-{$username}.conf";
+        @unlink($suspendConfPath);
+        $result['actions'][] = 'nginx_suspended_vhost_removed';
 
         // 3. Restore Apache vhost for apache-based stacks
         if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'])) {
@@ -551,10 +537,9 @@ APACHE;
                 Process::run("rm -f {$apacheBackupPath}");
                 $result['actions'][] = 'apache_vhost_restored';
             }
-            // Apache vhost regeneration is handled by generateVhostForDomain() above for nginx_varnish_apache
         }
 
-        // 4. For varnish stacks: purge stale 403 from cache
+        // 4. For varnish stacks: purge stale cache
         if (in_array($stack, ['nginx_varnish_apache', 'nginx_apache'])) {
             Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
             Process::run("varnishadm 'ban req.http.host == \"www.{$domain}\"' 2>&1");
