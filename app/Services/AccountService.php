@@ -64,7 +64,7 @@ class AccountService
             $user['package'] = $dbUser->package;
             $user['disk_limit'] = $dbUser->disk_limit;
             $user['bandwidth_limit'] = $dbUser->bandwidth_limit;
-            $user['suspended'] = (bool) $dbUser->suspended;
+            $user['suspended'] = ($dbUser->status === 'suspended');
             $user['created_at'] = $dbUser->created_at;
         }
 
@@ -230,9 +230,8 @@ class AccountService
         DB::connection('mysql')->table('accounts')
             ->where('username', $username)
             ->update([
-                'suspended' => true,
-                'suspended_at' => now(),
-                'suspension_reason' => $reason,
+                'status' => 'suspended',
+                'updated_at' => now(),
             ]);
 
         $this->reloadServices();
@@ -265,9 +264,8 @@ class AccountService
         DB::connection('mysql')->table('accounts')
             ->where('username', $username)
             ->update([
-                'suspended' => false,
-                'suspended_at' => null,
-                'suspension_reason' => null,
+                'status' => 'active',
+                'updated_at' => now(),
             ]);
 
         $this->reloadServices();
@@ -752,7 +750,7 @@ CONF;
             'package' => $package,
             'disk_limit' => $disk,
             'bandwidth_limit' => $bandwidth,
-            'suspended' => false,
+            'status' => 'active',
             'created_at' => now(),
             'updated_at' => now(),
         ]);
