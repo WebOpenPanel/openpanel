@@ -21,6 +21,10 @@ class AbuseMonitorService
         $findings = array_merge($findings, self::checkSymlinkViolations());
         $findings = array_merge($findings, self::checkExcessiveProcesses());
         $findings = array_merge($findings, self::checkDiskUsage());
+        $findings = array_merge($findings, self::checkMailQueue());
+        $findings = array_merge($findings, self::checkLoginFailures());
+        $findings = array_merge($findings, self::checkFtpChrootIsolation());
+        $findings = array_merge($findings, self::checkBackupUsage());
 
         return [
             'timestamp' => now()->toISOString(),
@@ -228,5 +232,95 @@ class AbuseMonitorService
             'details' => $highUsage,
             'message' => "Users with >5GB disk usage",
         ]];
+    }
+
+    /**
+     * Check mail queue size for spam indicators.
+     */
+    protected static function checkMailQueue(): array
+    {
+        $output = Process::timeout(10)->run(
+            "mailq 2>/dev/null | tail -1"
+        )->output();
+
+        // mailq summary line: "-- N requests (Q K bytes)"
+        if (preg_match('/(\d+)\s+request/i', $output, $m)) {
+            $count = (int) $m[1];
+            if ($count > 100) {
+                return [[
+                    'type' => 'large_mail_queue',
+                    'severity' => $count > 500 ? 'critical' : 'warning',
+                    'count' => $count,
+                    'message' => "Mail queue has {$count} messages (possible spam)",
+                ]];
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Check for repeated failed login attempts.
+     */
+    protected static function checkLoginFailures(): array
+    {
+        // Count failed auth attempts in the last hour from secure log
+        $output = Process::timeout(10)->run(
+            "journalctl -u sshd --since '1 hour ago' 2>/dev/null | grep -c 'Failed password' || " .
+            "grep -c 'Failed password' /var/log/secure 2>/dev/null || echo 0"
+        )->output();
+
+        $count = (int) trim($output);
+        if ($count > 20) {
+            return [[
+                'type' => 'login_failures',
+                'severity' => $count > 100 ? 'critical' : 'warning',
+                'count' => $count,
+                'message' => "{$count} failed login attempts in the last hour",
+            ]];
+        }
+
+        return [];
+    }
+
+    /**
+     * Verify FTP chroot isolation is properly configured.
+     */
+    protected static function checkFtpChrootIsolation(): array
+    {
+        $result = FtpService::verifyChrootIsolation();
+        if (!$result['chroot_configured']) {
+            return [[
+                'type' => 'ftp_chroot_issues',
+                'severity' => 'high',
+                'count' => count($result['issues']),
+                'details' => $result['issues'],
+                'message' => 'FTP chroot isolation not fully configured',
+            ]];
+        }
+
+        return [];
+    }
+
+    /**
+     * Check backup storage usage.
+     */
+    protected static function checkBackupUsage(): array
+    {
+        $output = Process::timeout(10)->run(
+            "du -sm /backup/ 2>/dev/null | awk '{print $1}'"
+        )->output();
+
+        $totalMb = (int) trim($output);
+        if ($totalMb > 51200) { // >50GB
+            return [[
+                'type' => 'high_backup_usage',
+                'severity' => 'warning',
+                'disk_mb' => $totalMb,
+                'message' => "Backup storage using {$totalMb}MB (>50GB)",
+            ]];
+        }
+
+        return [];
     }
 }

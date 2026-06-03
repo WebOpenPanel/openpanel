@@ -213,6 +213,38 @@ class V1Controller extends Controller
         }
     }
 
+    public function accountResourceLimits(Request $request, string $username): JsonResponse
+    {
+        if ($r = $this->scope($request, 'admin:all')) return $r;
+
+        $user = (new AccountService())->getUser($username);
+        if (!$user) {
+            return $this->fail('Account not found', 404);
+        }
+
+        $usage = \App\Services\ResourceControlService::getUsage($username);
+        $package = $user['package'] ?? 'default';
+        $pkgModel = \App\Models\Package::where('name', $package)->first();
+
+        return $this->ok([
+            'username' => $username,
+            'package' => $package,
+            'limits' => $pkgModel ? [
+                'disk_space_mb' => $pkgModel->disk_space_mb,
+                'nproc' => $pkgModel->nproc,
+                'nofile' => $pkgModel->nofile,
+                'max_domains' => $pkgModel->max_domains,
+                'max_email_accounts' => $pkgModel->max_email_accounts,
+                'max_databases' => $pkgModel->max_databases,
+                'max_ftp_accounts' => $pkgModel->max_ftp_accounts,
+                'max_cron_jobs' => $pkgModel->max_cron_jobs,
+                'hourly_emails' => $pkgModel->hourly_emails,
+                'cgroups' => $pkgModel->cgroups,
+            ] : null,
+            'usage' => $usage,
+        ]);
+    }
+
     public function accountGet(Request $request, string $username): JsonResponse
     {
         if ($r = $this->scope($request, 'accounts:read')) return $r;

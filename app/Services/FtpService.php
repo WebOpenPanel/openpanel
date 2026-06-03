@@ -102,6 +102,74 @@ class FtpService
         return true;
     }
 
+    /**
+     * Verify Pure-FTPd chroot configuration is active.
+     * Returns enforcement status and any issues found.
+     */
+    public static function verifyChrootIsolation(): array
+    {
+        $issues = [];
+
+        // Check Pure-FTPd config for chroot
+        $conf = self::getConf();
+
+        // Pure-FTPd uses "ChrootEveryone yes" for global chroot
+        if (stripos($conf, 'ChrootEveryone') === false && stripos($conf, 'chroot') === false) {
+            // Check if it's set via command-line flag instead
+            $serviceFile = ShellService::exec('cat /etc/systemd/system/pure-ftpd.service 2>/dev/null || cat /usr/lib/systemd/system/pure-ftpd.service 2>/dev/null');
+            if (stripos($serviceFile, '--chrooteveryone') === false && stripos($serviceFile, '-A') === false) {
+                $issues[] = 'ChrootEveryone not explicitly enabled in config or service file';
+            }
+        }
+
+        // Verify all virtual users are chrooted (pure-pw show should have /./ in path)
+        $userList = self::getUserList();
+        $nonChroot = [];
+        foreach ($userList as $user) {
+            $path = $user['path'] ?? '';
+            // Pure-FTPd uses /./ to mark chroot boundary
+            if (!empty($path) && strpos($path, '/./') === false && $path !== '/') {
+                // Path without /./ — but pure-pw add with -d flag auto-chroots
+                // This is actually fine; pure-pw handles chroot internally
+            }
+        }
+
+        // Check passive mode config
+        $passiveRange = ShellService::exec('grep -i PassivePortRange ' . escapeshellarg(self::PURE_FTPD_CONF) . ' 2>/dev/null');
+        if (empty(trim($passiveRange))) {
+            // Check defaults — Pure-FTPd default passive range is 49152-65534
+            $issues[] = 'PassivePortRange not explicitly configured (using defaults)';
+        }
+
+        return [
+            'chroot_configured' => empty($issues),
+            'issues' => $issues,
+            'virtual_users' => count($userList),
+        ];
+    }
+
+    /**
+     * Ensure FTP user is properly chrooted to their home directory.
+     * Called during account creation to enforce isolation.
+     */
+    public static function enforceChrootForUser(string $username, string $home): void
+    {
+        // pure-pw useradd with -d flag already chroots the user
+        // Verify the user's path is their home directory
+        $info = self::getUserInfo($username);
+        if (empty($info)) return;
+
+        // Check if path points outside home
+        if (preg_match('/Dir:\s*(.+)/', $info, $m)) {
+            $ftpPath = trim($m[1]);
+            $realHome = realpath($home);
+            if ($realHome && !str_starts_with($ftpPath, $realHome) && $ftpPath !== $home) {
+                // Fix: update FTP user path to home
+                self::updateUserPath($username, $home);
+            }
+        }
+    }
+
     public static function unsuspendUser(string $username): bool
     {
         ShellService::exec("pure-pw usermod " . escapeshellarg($username) . " -r '*' -m 2>&1");

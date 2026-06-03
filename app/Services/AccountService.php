@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use App\Services\ShellService;
+use App\Services\ResourceControlService;
 
 class AccountService
 {
@@ -49,6 +50,9 @@ class AccountService
         $this->createEmailDomain($username, $domain);
         $this->setupFtpUser($username, $password);
         $this->recordInDatabase($username, $domain, $ip, $email, $package, $disk, $bandwidth);
+
+        // Apply resource limits from package (cgroups, nproc, disk quotas)
+        ResourceControlService::applyForUser($username, $package);
         $this->reloadServices();
 
         return [
@@ -74,6 +78,7 @@ class AccountService
         $this->stackService->removeVhostForDomain($activeStack, $username, $user['domain']);
         $this->removeDnsZone($username, $user['domain']);
         $this->removeEmailDomain($user['domain']);
+        ResourceControlService::removeFromUser($username);
         $this->removeSystemUser($username);
         $this->removeFromDatabase($username);
         $this->reloadServices();

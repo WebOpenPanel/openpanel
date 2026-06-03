@@ -19,6 +19,7 @@ Route::prefix('v1')->middleware(\App\Http\Middleware\ApiAuthMiddleware::class)->
     Route::post('/accounts/{username}/change-password', [$c, 'accountChangePassword']);
     Route::post('/accounts/{username}/change-package', [$c, 'accountChangePackage']);
     Route::post('/accounts/{username}/repair-isolation', [$c, 'accountRepairIsolation']);
+    Route::get('/accounts/{username}/resource-limits', [$c, 'accountResourceLimits']);
     Route::get('/accounts/{username}', [$c, 'accountGet']);
     Route::get('/accounts/{username}/usage', [$c, 'accountUsage']);
 
