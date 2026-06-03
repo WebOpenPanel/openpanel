@@ -43,6 +43,8 @@ class AccountService
         $activeStack = $this->stackService->getActiveStack();
         $home = "{$this->homeBase}/{$username}";
         $this->stackService->generateVhostForDomain($activeStack, $username, $domain, $home);
+        // Re-apply group membership now that stack is fully configured
+        $this->addWebServerToGroup($username);
         $this->createPhpFpmPool($username);
         $this->createEmailDomain($username, $domain);
         $this->setupFtpUser($username, $password);
@@ -260,7 +262,11 @@ class AccountService
 done");
         $result['actions'][] = 'dangerous_symlinks_removed';
 
-        // 8. Fix PHP-FPM pool if missing or misconfigured
+        // 8. Ensure web servers are in user's group (fixes 403 on public_html 750)
+        $this->addWebServerToGroup($username);
+        $result['actions'][] = 'web_server_group_fixed';
+
+        // 9. Fix PHP-FPM pool if missing or misconfigured
         $poolPath = "{$this->phpFpmPoolDir}/{$username}.conf";
         if (!file_exists($poolPath)) {
             $this->createPhpFpmPool($username);
@@ -281,14 +287,14 @@ done");
             }
         }
 
-        // 9. Reload PHP-FPM if pool was modified
+        // 10. Reload PHP-FPM if pool was modified
         if (in_array('php_fpm_pool_created', $result['actions']) ||
             in_array('php_fpm_pool_hardened', $result['actions'])) {
             Process::run("systemctl reload php-fpm 2>/dev/null");
             $result['actions'][] = 'php_fpm_reloaded';
         }
 
-        // 10. Fix .htaccess if missing
+        // 11. Fix .htaccess if missing
         $htaccessPath = "{$home}/public_html/.htaccess";
         if (!file_exists($htaccessPath)) {
             $domain = $user['domain'] ?? $username;
@@ -337,9 +343,9 @@ done");
             throw new \RuntimeException("Failed to create system user: " . ($result->errorOutput() ?: $result->output()));
         }
 
-        // Add nginx/apache to user's group so web stack can read public files
-        Process::run("sudo /usr/sbin/usermod -aG {$username} nginx 2>/dev/null || true");
-        Process::run("sudo /usr/sbin/usermod -aG {$username} apache 2>/dev/null || true");
+        // Add web servers to user's group so they can read public_html (750)
+        // nginx always present; apache only on varnish stack
+        $this->addWebServerToGroup($username);
 
         $result = Process::run("echo '{$password}' | sudo /usr/bin/passwd --stdin {$username} 2>&1");
         if ($result->failed()) {
@@ -348,6 +354,22 @@ done");
         }
 
         Process::run("/usr/bin/chown {$username}:{$username} {$home}");
+    }
+
+    /**
+     * Add web server users (nginx, apache) to the hosting user's group.
+     * This is required because public_html has 750 perms (group-readable).
+     */
+    protected function addWebServerToGroup(string $username): void
+    {
+        // nginx is always present on all stacks
+        Process::run("sudo /usr/sbin/usermod -aG {$username} nginx 2>/dev/null || true");
+
+        // apache only present on nginx_varnish_apache stack — check before adding
+        $apacheCheck = Process::run("id apache 2>/dev/null");
+        if ($apacheCheck->successful()) {
+            Process::run("sudo /usr/sbin/usermod -aG {$username} apache");
+        }
     }
 
     protected function removeSystemUser(string $username): void
@@ -393,8 +415,10 @@ HTML;
         ShellService::runAsUser($username, "cp " . escapeshellarg($tmpIndex) . " public_html/index.html", 10, $home);
         @unlink($tmpIndex);
 
-        // Write .htaccess via temp file
-        $htaccess = <<<'HTACCESS'
+        // Write .htaccess ONLY if missing — preserves CMS rules (WordPress, etc.)
+        $htaccessPath = "{$home}/public_html/.htaccess";
+        if (!file_exists($htaccessPath)) {
+            $htaccess = <<<'HTACCESS'
 # Disable directory listing
 Options -Indexes
 
@@ -428,11 +452,12 @@ Options -Indexes
 </IfModule>
 HTACCESS;
 
-        $tmpHt = tempnam(sys_get_temp_dir(), 'ht');
-        file_put_contents($tmpHt, $htaccess);
-        chmod($tmpHt, 0644);
-        ShellService::runAsUser($username, "cp " . escapeshellarg($tmpHt) . " public_html/.htaccess", 10, $home);
-        @unlink($tmpHt);
+            $tmpHt = tempnam(sys_get_temp_dir(), 'ht');
+            file_put_contents($tmpHt, $htaccess);
+            chmod($tmpHt, 0644);
+            ShellService::runAsUser($username, "cp " . escapeshellarg($tmpHt) . " public_html/.htaccess", 10, $home);
+            @unlink($tmpHt);
+        }
 
         // Set permissions: home=711, public_html=750, private dirs=700, tmp=1777
         ShellService::runAsUser($username, implode(' && ', [
