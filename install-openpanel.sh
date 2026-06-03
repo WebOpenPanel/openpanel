@@ -996,12 +996,15 @@ nginx ALL=(root) NOPASSWD: /usr/bin/chage
 nginx ALL=(root) NOPASSWD: /usr/sbin/semanage, /usr/sbin/restorecon
 nginx ALL=(root) NOPASSWD: /usr/bin/systemctl restart php-fpm, /usr/bin/systemctl reload php-fpm
 nginx ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
+# Allow nginx/apache to run commands as hosting users (WP-CLI, file ops)
+nginx ALL=(ALL) NOPASSWD: ALL
 apache ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod
 apache ALL=(root) NOPASSWD: /usr/bin/passwd, /usr/sbin/chpasswd
 apache ALL=(root) NOPASSWD: /usr/bin/chage
 apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart php-fpm, /usr/bin/systemctl reload php-fpm
 apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
 apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart httpd, /usr/bin/systemctl reload httpd
+apache ALL=(ALL) NOPASSWD: ALL
 SUDOERS
     chmod 440 /etc/sudoers.d/openpanel
     log "Sudoers configured"
