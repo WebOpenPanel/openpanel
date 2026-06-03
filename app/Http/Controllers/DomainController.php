@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Domain;
+use App\Models\Subdomain;
+use App\Models\DomainAlias;
 use App\Models\UserAccount;
 use Illuminate\Http\Request;
 
@@ -85,5 +87,31 @@ class DomainController extends Controller
         $domain->delete();
         return redirect()->route('domains.index')
             ->with('success', 'Domain deleted successfully.');
+    }
+
+    public function subdomains()
+    {
+        $subdomains = Subdomain::with('userAccount')->latest()->paginate(20);
+        return view('domains.subdomains', compact('subdomains'));
+    }
+
+    public function destroySubdomain(Subdomain $subdomain)
+    {
+        $subdomain->delete();
+        return redirect()->route('subdomains')
+            ->with('success', 'Subdomain deleted.');
+    }
+
+    public function aliases()
+    {
+        $aliases = DomainAlias::with('userAccount')->latest()->paginate(20);
+        return view('domains.aliases', compact('aliases'));
+    }
+
+    public function destroyAlias(DomainAlias $alias)
+    {
+        $alias->delete();
+        return redirect()->route('domain-aliases')
+            ->with('success', 'Domain alias deleted.');
     }
 }

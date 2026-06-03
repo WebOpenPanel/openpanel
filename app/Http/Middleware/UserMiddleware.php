@@ -25,6 +25,13 @@ class UserMiddleware
             return redirect()->route('login');
         }
 
+        $port = $request->getPort();
+        $adminPorts = [2086, 2087];
+
+        if (!$user->isAdmin() && in_array($port, $adminPorts)) {
+            return redirect('https://' . $request->getHost() . ':2083' . $request->getRequestUri());
+        }
+
         return $next($request);
     }
 }

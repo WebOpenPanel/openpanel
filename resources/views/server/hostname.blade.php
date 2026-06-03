@@ -23,7 +23,13 @@
         </div>
         <div class="bg-white rounded-xl shadow-sm border p-5">
             <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-tachometer-alt mr-2 text-yellow-500"></i>Load Average</h3>
-            <div class="text-sm text-gray-600">{{ $loadAvg ?? 'N/A' }}</div>
+            <div class="text-sm text-gray-600">
+                @if(is_array($loadAvg))
+                    1m: {{ $loadAvg['1min'] ?? 'N/A' }} | 5m: {{ $loadAvg['5min'] ?? 'N/A' }} | 15m: {{ $loadAvg['15min'] ?? 'N/A' }}
+                @else
+                    {{ $loadAvg ?? 'N/A' }}
+                @endif
+            </div>
         </div>
         <div class="bg-white rounded-xl shadow-sm border p-5">
             <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-clock mr-2 text-green-500"></i>Uptime</h3>

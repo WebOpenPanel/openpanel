@@ -7,6 +7,7 @@
             <a href="{{ route('ssl.index') }}" class="px-3 py-1.5 text-sm bg-indigo-100 text-indigo-700 rounded-lg">All</a>
             <a href="{{ route('ssl.index', ['status' => 'active']) }}" class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Active</a>
             <a href="{{ route('ssl.index', ['status' => 'expired']) }}" class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Expired</a>
+            <a href="{{ route('ssl.panel') }}" class="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Panel SSL</a>
         </div>
         <a href="{{ route('ssl.generate') }}" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"><i class="fas fa-plus mr-2"></i> Generate SSL</a>
     </div>

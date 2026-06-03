@@ -19,7 +19,7 @@ class BandwidthService
 
     public static function getAllUsage(string $period = 'today'): array
     {
-        $usernames = DB::table('user')->pluck('username')->toArray();
+        $usernames = DB::table('accounts')->pluck('username')->toArray();
         $usage = [];
         foreach ($usernames as $username) {
             $u = self::getUserUsage($username, $period);

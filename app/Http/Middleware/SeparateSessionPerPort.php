@@ -13,8 +13,13 @@ class SeparateSessionPerPort
         $port = $request->getPort();
         $baseCookie = config('session.cookie');
 
-        if ($port === 2083) {
+        $userPorts = [2082, 2083, 2095, 2096];
+        $adminPorts = [2086, 2087];
+
+        if (in_array($port, $userPorts)) {
             config(['session.cookie' => $baseCookie . '_user']);
+        } elseif (in_array($port, $adminPorts)) {
+            config(['session.cookie' => $baseCookie . '_admin']);
         } else {
             config(['session.cookie' => $baseCookie . '_admin']);
         }

@@ -32,6 +32,11 @@ class AdminMiddleware
             return redirect('https://' . $request->getHost() . ':2083/login');
         }
 
+        $port = $request->getPort();
+        if (!in_array($port, [2086, 2087])) {
+            return redirect('https://' . $request->getHost() . ':2087' . $request->getRequestUri());
+        }
+
         return $next($request);
     }
 }

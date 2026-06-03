@@ -3,9 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\SslCertificate;
-use App\Models\UserAccount;
+use Illuminate\Support\Facades\DB;
 use App\Services\WebServerService;
 use App\Services\ShellService;
+use App\Services\PanelSslService;
 use Illuminate\Http\Request;
 
 class SslController extends Controller
@@ -25,7 +26,7 @@ class SslController extends Controller
 
     public function generate()
     {
-        $accounts = UserAccount::where('suspended', 'no')->orderBy('domain')->get();
+        $accounts = DB::table('accounts')->where('status', '!=', 'suspended')->orderBy('domain')->get();
         return view('ssl.generate', compact('accounts'));
     }
 
@@ -33,7 +34,7 @@ class SslController extends Controller
     {
         $request->validate([
             'domain' => 'required|string|max:255',
-            'user_account_id' => 'nullable|exists:user_accounts,id',
+            'user_account_id' => 'nullable|integer',
         ]);
         $domain = $request->domain;
         $cert = $this->createSelfSignedCert($domain);
@@ -94,7 +95,7 @@ class SslController extends Controller
 
     public function letsEncrypt()
     {
-        $accounts = UserAccount::where('suspended', 'no')->orderBy('domain')->get();
+        $accounts = DB::table('accounts')->where('status', '!=', 'suspended')->orderBy('domain')->get();
         return view('ssl.letsencrypt', compact('accounts'));
     }
 
@@ -201,21 +202,27 @@ class SslController extends Controller
 
     private function createSelfSignedCert(string $domain): array
     {
-        $dn = [
-            'countryName' => 'US',
-            'stateOrProvinceName' => 'California',
-            'localityName' => 'San Francisco',
-            'organizationName' => 'OpenPanel',
-            'commonName' => $domain,
-        ];
-        $privKey = openssl_pkey_new([
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
-        $csr = openssl_csr_new($dn, $privKey);
-        $cert = openssl_csr_sign($csr, null, $privKey, 365);
-        openssl_x509_export($cert, $certOut);
-        openssl_pkey_export($privKey, $keyOut);
+        $tmpKey = tempnam(sys_get_temp_dir(), 'ssl_key_');
+        $tmpCert = tempnam(sys_get_temp_dir(), 'ssl_cert_');
+        $subj = "/C=US/ST=California/L=San Francisco/O=OpenPanel/CN={$domain}";
+
+        $shell = ShellService::exec(
+            "/usr/bin/openssl req -new -newkey rsa:2048 -nodes -x509 -days 365"
+            . " -subj " . escapeshellarg($subj)
+            . " -keyout " . escapeshellarg($tmpKey)
+            . " -out " . escapeshellarg($tmpCert)
+            . " 2>&1"
+        );
+
+        $certOut = @file_get_contents($tmpCert);
+        $keyOut = @file_get_contents($tmpKey);
+        @unlink($tmpKey);
+        @unlink($tmpCert);
+
+        if (!$certOut || !$keyOut) {
+            throw new \RuntimeException("Failed to generate SSL certificate: " . $shell);
+        }
+
         return ['cert' => $certOut, 'key' => $keyOut];
     }
 
@@ -244,5 +251,60 @@ class SslController extends Controller
         foreach ($files as $f) {
             if (file_exists($f)) @unlink($f);
         }
+    }
+
+    public function panelSsl(PanelSslService $ssl)
+    {
+        $certInfo = $ssl->getPanelCertInfo();
+        $hostname = trim(ShellService::exec('hostname -f 2>/dev/null'));
+        $dns = $ssl->validateDns($hostname);
+        $certbotInstalled = $ssl->isCertbotInstalled();
+
+        return view('ssl.panel', compact('certInfo', 'hostname', 'dns', 'certbotInstalled'));
+    }
+
+    public function panelSslIssue(Request $request, PanelSslService $ssl)
+    {
+        $request->validate([
+            'hostname' => 'required|string|max:255',
+            'email' => 'nullable|email',
+        ]);
+
+        $result = $ssl->issuePanelCert($request->hostname, $request->email ?? '');
+
+        if ($result['success']) {
+            $ssl->setupAutoRenewal();
+            return back()->with('success', $result['message'])->with('output', $result['output'] ?? '');
+        }
+
+        return back()->with('error', $result['message'])->with('output', $result['output'] ?? '');
+    }
+
+    public function panelSslRenew(PanelSslService $ssl)
+    {
+        $result = $ssl->renewNow();
+        return back()->with('success', $result['message'])->with('output', $result['output'] ?? '');
+    }
+
+    public function panelSslRevoke(Request $request, PanelSslService $ssl)
+    {
+        $hostname = trim(ShellService::exec('hostname -f 2>/dev/null'));
+        $result = $ssl->revokeCert($hostname);
+        return back()->with('success', $result['message'])->with('output', $result['output'] ?? '');
+    }
+
+    public function panelSslSelfSigned(PanelSslService $ssl)
+    {
+        $ssl->generateSelfSigned();
+        return back()->with('success', 'Self-signed certificate regenerated.');
+    }
+
+    public function installCertbot(PanelSslService $ssl)
+    {
+        $result = $ssl->installCertbot();
+        if ($result['success']) {
+            return back()->with('success', $result['message']);
+        }
+        return back()->with('error', $result['message'])->with('output', $result['output'] ?? '');
     }
 }

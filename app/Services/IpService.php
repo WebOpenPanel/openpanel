@@ -216,7 +216,7 @@ class IpService
 
     public static function deleteIpNatUser(string $username): bool
     {
-        $user = \Illuminate\Support\Facades\DB::connection('openpanel')->table('user')->where('username', $username)->first();
+        $user = \Illuminate\Support\Facades\DB::connection('sqlite')->table('user')->where('username', $username)->first();
         if (!$user) return false;
         $ip = $user->ip_address;
 

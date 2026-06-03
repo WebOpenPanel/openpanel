@@ -14,42 +14,39 @@ class UserEmailController extends Controller
         return \Illuminate\Support\Facades\Auth::user()->username;
     }
 
+    protected function accountId(): ?int
+    {
+        $account = DB::table('accounts')->where('username', $this->username())->first();
+        return $account?->id;
+    }
+
+    protected function domains()
+    {
+        $id = $this->accountId();
+        return $id ? DB::table('domains')->where('user_account_id', $id)->pluck('domain') : collect();
+    }
+
     public function index()
     {
-        $accounts = DB::connection('openpanel')->table('email')
-            ->where('user', $this->username())
-            ->get();
-
-        $domains = DB::connection('openpanel')->table('domains')
-            ->where('user', $this->username())
-            ->pluck('domain');
-
+        $id = $this->accountId();
+        $accounts = $id ? DB::table('email_accounts')->where('user_account_id', $id)->get() : collect();
+        $domains = $this->domains();
         return view('user-panel.email.index', compact('accounts', 'domains'));
     }
 
     public function forwarders()
     {
-        $forwarders = DB::connection('openpanel')->table('email_forwarders')
-            ->where('user', $this->username())
-            ->get();
-
-        $domains = DB::connection('openpanel')->table('domains')
-            ->where('user', $this->username())
-            ->pluck('domain');
-
+        $id = $this->accountId();
+        $forwarders = $id ? DB::table('email_forwarders')->where('user_account_id', $id)->get() : collect();
+        $domains = $this->domains();
         return view('user-panel.email.forwarders', compact('forwarders', 'domains'));
     }
 
     public function autoresponders()
     {
-        $autoresponders = DB::connection('openpanel')->table('email_autoresponders')
-            ->where('user', $this->username())
-            ->get();
-
-        $domains = DB::connection('openpanel')->table('domains')
-            ->where('user', $this->username())
-            ->pluck('domain');
-
+        $id = $this->accountId();
+        $autoresponders = $id ? DB::table('email_autoresponders')->where('user_account_id', $id)->get() : collect();
+        $domains = $this->domains();
         return view('user-panel.email.autoresponders', compact('autoresponders', 'domains'));
     }
 
@@ -61,16 +58,17 @@ class UserEmailController extends Controller
             'quota' => 'integer|min:0',
         ]);
 
-        $username = $this->username();
         $email = $request->email;
-        $password = $request->password;
-        $quota = $request->quota ?? 250;
-
         $parts = explode('@', $email);
         $domain = $parts[1] ?? '';
 
-        $domainCheck = DB::connection('openpanel')->table('domains')
-            ->where('user', $username)
+        $id = $this->accountId();
+        if (!$id) {
+            return back()->with('error', 'Account not found.');
+        }
+
+        $domainCheck = DB::table('domains')
+            ->where('user_account_id', $id)
             ->where('domain', $domain)
             ->exists();
 
@@ -78,7 +76,17 @@ class UserEmailController extends Controller
             return back()->with('error', 'Domain not found or not owned by you.');
         }
 
-        ShellService::exec("echo '" . escapeshellarg($password) . "' | /usr/local/bin/mailadd {$username} {$email} {$quota} 2>&1");
+        $passwordHash = password_hash($request->password, PASSWORD_DEFAULT);
+        DB::table('email_accounts')->insert([
+            'user_account_id' => $id,
+            'domain' => $domain,
+            'email' => $email,
+            'password_hash' => $passwordHash,
+            'quota_mb' => $request->quota ?? 250,
+            'status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
         return back()->with('success', "Email account {$email} created.");
     }
@@ -86,82 +94,10 @@ class UserEmailController extends Controller
     public function deleteAccount(Request $request)
     {
         $request->validate(['id' => 'required|integer']);
+        $id = $this->accountId();
+        if (!$id) return back()->with('error', 'Account not found.');
 
-        $account = DB::connection('openpanel')->table('email')
-            ->where('id', $request->id)
-            ->where('user', $this->username())
-            ->first();
-
-        if (!$account) {
-            return back()->with('error', 'Account not found.');
-        }
-
-        DB::connection('openpanel')->table('email')->where('id', $request->id)->delete();
-
+        DB::table('email_accounts')->where('id', $request->id)->where('user_account_id', $id)->delete();
         return back()->with('success', 'Email account deleted.');
-    }
-
-    public function createForwarder(Request $request)
-    {
-        $request->validate([
-            'source' => 'required|string',
-            'destination' => 'required|email',
-        ]);
-
-        $username = $this->username();
-
-        DB::connection('openpanel')->table('email_forwarders')->insert([
-            'user' => $username,
-            'source' => $request->source,
-            'destination' => $request->destination,
-            'created_at' => now(),
-        ]);
-
-        return back()->with('success', 'Forwarder created.');
-    }
-
-    public function deleteForwarder(Request $request)
-    {
-        $request->validate(['id' => 'required|integer']);
-
-        DB::connection('openpanel')->table('email_forwarders')
-            ->where('id', $request->id)
-            ->where('user', $this->username())
-            ->delete();
-
-        return back()->with('success', 'Forwarder deleted.');
-    }
-
-    public function createAutoresponder(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|string',
-            'subject' => 'required|string',
-            'body' => 'required|string',
-        ]);
-
-        $username = $this->username();
-
-        DB::connection('openpanel')->table('email_autoresponders')->insert([
-            'user' => $username,
-            'email' => $request->email,
-            'subject' => $request->subject,
-            'body' => $request->body,
-            'created_at' => now(),
-        ]);
-
-        return back()->with('success', 'Autoresponder created.');
-    }
-
-    public function deleteAutoresponder(Request $request)
-    {
-        $request->validate(['id' => 'required|integer']);
-
-        DB::connection('openpanel')->table('email_autoresponders')
-            ->where('id', $request->id)
-            ->where('user', $this->username())
-            ->delete();
-
-        return back()->with('success', 'Autoresponder deleted.');
     }
 }

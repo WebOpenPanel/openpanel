@@ -13,19 +13,21 @@ class UserDashboardController extends Controller
         $user = \Illuminate\Support\Facades\Auth::user();
         $username = $user->username;
 
-        $diskUsed = trim(ShellService::exec("du -sm /home/{$username} 2>/dev/null | cut -f1") ?: '0');
-        $diskQuota = trim(ShellService::exec("quota -u {$username} 2>/dev/null | tail -1 | awk '{print $2}'") ?: '0');
+        $diskUsed = (int) trim(ShellService::exec("du -sm /home/{$username} 2>/dev/null | cut -f1") ?: '0');
 
-        $domains = DB::connection('openpanel')->table('domains')->where('user', $username)->count();
-        $databases = DB::connection('openpanel')->table('mysql_db')->where('user', $username)->count();
-        $emailAccounts = DB::connection('openpanel')->table('email')->where('user', $username)->count();
-        $ftpAccounts = DB::connection('openpanel')->table('ftp')->where('user', $username)->count();
+        $account = DB::table('accounts')->where('username', $username)->first();
+        $accountId = $account?->id;
+        $diskQuota = $account?->disk_limit ?? 0;
+        $package = $account;
 
-        $package = DB::connection('openpanel')->table('user')->where('username', $username)->first();
+        $domains = $accountId ? DB::table('domains')->where('user_account_id', $accountId)->count() : 0;
+        $databases = $accountId ? DB::table('mysql_databases')->where('user_account_id', $accountId)->count() : 0;
+        $emailAccounts = $accountId ? DB::table('email_accounts')->where('user_account_id', $accountId)->count() : 0;
+        $ftpAccounts = $accountId ? DB::table('ftp_accounts')->where('user_account_id', $accountId)->count() : 0;
 
         return view('user-panel.dashboard', compact(
-            'username', 'diskUsed', 'diskQuota',
-            'domains', 'databases', 'emailAccounts', 'ftpAccounts', 'package'
+            'username', 'diskUsed', 'diskQuota', 'account', 'package',
+            'domains', 'databases', 'emailAccounts', 'ftpAccounts'
         ));
     }
 }

@@ -64,6 +64,7 @@ use App\Http\Controllers\UserPanel\UserSslController;
 use App\Http\Controllers\UserPanel\UserDnsController;
 use App\Http\Controllers\UserPanel\UserStatsController;
 use App\Http\Controllers\UserPanel\UserBackupController;
+use App\Http\Controllers\UserPanel\UserWordPressController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => redirect()->route('login'));
@@ -79,12 +80,22 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // User Accounts
-    Route::resource('accounts', UserAccountController::class);
-    Route::post('accounts/{account}/suspend', [UserAccountController::class, 'suspend'])->name('accounts.suspend');
-    Route::post('accounts/{account}/unsuspend', [UserAccountController::class, 'unsuspend'])->name('accounts.unsuspend');
+    Route::get('accounts', [UserAccountController::class, 'index'])->name('accounts.index');
+    Route::get('accounts/create', [UserAccountController::class, 'create'])->name('accounts.create');
+    Route::post('accounts', [UserAccountController::class, 'store'])->name('accounts.store');
+    Route::get('accounts/{username}', [UserAccountController::class, 'show'])->name('accounts.show');
+    Route::get('accounts/{username}/edit', [UserAccountController::class, 'edit'])->name('accounts.edit');
+    Route::put('accounts/{username}', [UserAccountController::class, 'update'])->name('accounts.update');
+    Route::delete('accounts/{username}', [UserAccountController::class, 'destroy'])->name('accounts.destroy');
+    Route::post('accounts/{username}/suspend', [UserAccountController::class, 'suspend'])->name('accounts.suspend');
+    Route::post('accounts/{username}/unsuspend', [UserAccountController::class, 'unsuspend'])->name('accounts.unsuspend');
 
     // Domains
     Route::resource('domains', DomainController::class);
+    Route::get('subdomains', [DomainController::class, 'subdomains'])->name('subdomains');
+    Route::delete('subdomains/{subdomain}', [DomainController::class, 'destroySubdomain'])->name('subdomains.destroy');
+    Route::get('domain-aliases', [DomainController::class, 'aliases'])->name('domain-aliases');
+    Route::delete('domain-aliases/{alias}', [DomainController::class, 'destroyAlias'])->name('domain-aliases.destroy');
 
     // DNS
     Route::prefix('dns')->name('dns.')->group(function () {
@@ -182,6 +193,12 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::post('/validate-dns', [SslController::class, 'validateDomainDns'])->name('validate-dns');
         Route::post('/force-renew-all', [SslController::class, 'forceRenewAll'])->name('force-renew-all');
         Route::get('/info/{domain}', [SslController::class, 'getInfo'])->name('info');
+        Route::get('/panel', [SslController::class, 'panelSsl'])->name('panel');
+        Route::post('/panel/issue', [SslController::class, 'panelSslIssue'])->name('panel-issue');
+        Route::post('/panel/renew', [SslController::class, 'panelSslRenew'])->name('panel-renew');
+        Route::post('/panel/revoke', [SslController::class, 'panelSslRevoke'])->name('panel-revoke');
+        Route::post('/panel/self-signed', [SslController::class, 'panelSslSelfSigned'])->name('panel-self-signed');
+        Route::post('/panel/install-certbot', [SslController::class, 'installCertbot'])->name('panel-install-certbot');
     });
 
     // Security
@@ -338,11 +355,23 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::post('/terminal', [ServerController::class, 'runCommand'])->name('run-command');
     });
 
+    // Web Stack Manager
+    Route::prefix('web-stack')->name('web-stack.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\WebStackController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\WebStackController::class, 'install'])->name('install');
+        Route::post('/validate', [\App\Http\Controllers\WebStackController::class, 'validate'])->name('validate');
+        Route::post('/switch', [\App\Http\Controllers\WebStackController::class, 'switchStack'])->name('switch');
+        Route::post('/rollback', [\App\Http\Controllers\WebStackController::class, 'rollback'])->name('rollback');
+        Route::get('/health', [\App\Http\Controllers\WebStackController::class, 'health'])->name('health');
+        Route::post('/test-domain', [\App\Http\Controllers\WebStackController::class, 'testDomain'])->name('test-domain');
+    });
+
     // Settings
     Route::prefix('settings')->name('settings.')->group(function () {
         Route::get('/', [SettingsController::class, 'index'])->name('index');
         Route::put('/password', [SettingsController::class, 'changePassword'])->name('change-password');
-        Route::put('/profile', [SettingsController::class, 'updateProfile'])->name('update-profile');
+        Route::put('/theme', [SettingsController::class, 'changeTheme'])->name('change-theme');
+        Route::put('/language', [SettingsController::class, 'changeLanguage'])->name('change-language');
     });
 
     // Node.js Manager
@@ -371,6 +400,23 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::get('/', [ApiController::class, 'index'])->name('index');
         Route::post('/generate', [ApiController::class, 'generate'])->name('generate');
         Route::delete('/', [ApiController::class, 'destroy'])->name('destroy');
+    });
+
+    // API Tokens (new)
+    Route::prefix('api-tokens')->name('api-tokens.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ApiTokenController::class, 'index'])->name('index');
+        Route::post('/', [\App\Http\Controllers\ApiTokenController::class, 'store'])->name('store');
+        Route::post('/{id}/revoke', [\App\Http\Controllers\ApiTokenController::class, 'revoke'])->name('revoke');
+        Route::post('/{id}/reactivate', [\App\Http\Controllers\ApiTokenController::class, 'reactivate'])->name('reactivate');
+        Route::delete('/{id}', [\App\Http\Controllers\ApiTokenController::class, 'destroy'])->name('destroy');
+    });
+
+    // Billing Integration
+    Route::prefix('billing')->name('billing.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\BillingProductController::class, 'index'])->name('index');
+        Route::post('/', [\App\Http\Controllers\BillingProductController::class, 'store'])->name('store');
+        Route::put('/{id}', [\App\Http\Controllers\BillingProductController::class, 'update'])->name('update');
+        Route::delete('/{id}', [\App\Http\Controllers\BillingProductController::class, 'destroy'])->name('destroy');
     });
 
     // Tomcat Manager
@@ -697,13 +743,361 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::post('/{port}/stop', [IcecastController::class, 'stop'])->name('stop');
         Route::post('/{port}/restart', [IcecastController::class, 'restart'])->name('restart');
     });
+
+    // PostgreSQL
+    Route::prefix('postgresql')->name('postgresql.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PostgresqlController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\PostgresqlController::class, 'install'])->name('install');
+        Route::post('/database', [\App\Http\Controllers\PostgresqlController::class, 'createDatabase'])->name('create-db');
+        Route::delete('/database', [\App\Http\Controllers\PostgresqlController::class, 'dropDatabase'])->name('drop-db');
+        Route::post('/user', [\App\Http\Controllers\PostgresqlController::class, 'createUser'])->name('create-user');
+        Route::delete('/user', [\App\Http\Controllers\PostgresqlController::class, 'dropUser'])->name('drop-user');
+        Route::post('/grant', [\App\Http\Controllers\PostgresqlController::class, 'grant'])->name('grant');
+        Route::post('/service', [\App\Http\Controllers\PostgresqlController::class, 'service'])->name('service');
+    });
+
+    // MongoDB
+    Route::prefix('mongo')->name('mongo.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\MongoController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\MongoController::class, 'install'])->name('install');
+        Route::post('/database', [\App\Http\Controllers\MongoController::class, 'createDatabase'])->name('create-db');
+        Route::delete('/database', [\App\Http\Controllers\MongoController::class, 'dropDatabase'])->name('drop-db');
+        Route::post('/user', [\App\Http\Controllers\MongoController::class, 'createUser'])->name('create-user');
+        Route::post('/service', [\App\Http\Controllers\MongoController::class, 'service'])->name('service');
+    });
+
+    // ModSecurity
+    Route::prefix('modsecurity')->name('modsecurity.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ModSecurityController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\ModSecurityController::class, 'install'])->name('install');
+        Route::post('/toggle', [\App\Http\Controllers\ModSecurityController::class, 'toggle'])->name('toggle');
+        Route::post('/update-rules', [\App\Http\Controllers\ModSecurityController::class, 'updateRules'])->name('update-rules');
+        Route::get('/log', [\App\Http\Controllers\ModSecurityController::class, 'viewLog'])->name('log');
+    });
+
+    // Firewall (CSF)
+    Route::prefix('firewall')->name('firewall.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\FirewallController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\FirewallController::class, 'install'])->name('install');
+        Route::post('/toggle', [\App\Http\Controllers\FirewallController::class, 'toggle'])->name('toggle');
+        Route::post('/block', [\App\Http\Controllers\FirewallController::class, 'blockIp'])->name('block');
+        Route::post('/unblock', [\App\Http\Controllers\FirewallController::class, 'unblockIp'])->name('unblock');
+        Route::post('/allow', [\App\Http\Controllers\FirewallController::class, 'allowIp'])->name('allow');
+        Route::post('/remove-allow', [\App\Http\Controllers\FirewallController::class, 'removeAllowIp'])->name('remove-allow');
+        Route::post('/port/allow', [\App\Http\Controllers\FirewallController::class, 'allowPort'])->name('port-allow');
+        Route::post('/port/deny', [\App\Http\Controllers\FirewallController::class, 'denyPort'])->name('port-deny');
+    });
+
+    // PHP Selector
+    Route::prefix('php-selector')->name('php-selector.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PhpSelectorController::class, 'index'])->name('index');
+        Route::post('/switch', [\App\Http\Controllers\PhpSelectorController::class, 'switchVersion'])->name('switch');
+        Route::post('/install', [\App\Http\Controllers\PhpSelectorController::class, 'installVersion'])->name('install');
+        Route::post('/remove', [\App\Http\Controllers\PhpSelectorController::class, 'removeVersion'])->name('remove');
+        Route::get('/modules', [\App\Http\Controllers\PhpSelectorController::class, 'getModules'])->name('modules');
+    });
+
+    // PHP-FPM Manager
+    Route::prefix('php-fpm')->name('php-fpm.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PhpFpmManagerController::class, 'index'])->name('index');
+        Route::get('/config', [\App\Http\Controllers\PhpFpmManagerController::class, 'editConfig'])->name('config');
+        Route::post('/config', [\App\Http\Controllers\PhpFpmManagerController::class, 'saveConfig'])->name('save-config');
+        Route::get('/pool/{pool}', [\App\Http\Controllers\PhpFpmManagerController::class, 'editPool'])->name('pool');
+        Route::post('/pool', [\App\Http\Controllers\PhpFpmManagerController::class, 'savePool'])->name('save-pool');
+        Route::post('/service', [\App\Http\Controllers\PhpFpmManagerController::class, 'service'])->name('service');
+    });
+
+    // DKIM
+    Route::prefix('dkim')->name('dkim.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\DkimController::class, 'index'])->name('index');
+        Route::post('/generate', [\App\Http\Controllers\DkimController::class, 'generate'])->name('generate');
+        Route::get('/view', [\App\Http\Controllers\DkimController::class, 'viewKey'])->name('view');
+        Route::post('/toggle', [\App\Http\Controllers\DkimController::class, 'toggle'])->name('toggle');
+    });
+
+    // SPF / DMARC
+    Route::prefix('spf')->name('spf.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\SpfController::class, 'index'])->name('index');
+        Route::post('/check', [\App\Http\Controllers\SpfController::class, 'check'])->name('check');
+    });
+
+    // Login Security
+    Route::prefix('login-security')->name('login-security.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\LoginSecurityController::class, 'index'])->name('index');
+        Route::post('/block', [\App\Http\Controllers\LoginSecurityController::class, 'blockIp'])->name('block');
+        Route::post('/unblock', [\App\Http\Controllers\LoginSecurityController::class, 'unblockIp'])->name('unblock');
+        Route::post('/kick', [\App\Http\Controllers\LoginSecurityController::class, 'kickUser'])->name('kick');
+        Route::post('/ssh', [\App\Http\Controllers\LoginSecurityController::class, 'updateSsh'])->name('ssh');
+    });
+
+    // Terminal
+    Route::prefix('terminal')->name('terminal.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\TerminalController::class, 'index'])->name('index');
+        Route::post('/execute', [\App\Http\Controllers\TerminalController::class, 'execute'])->name('execute');
+        Route::get('/history', [\App\Http\Controllers\TerminalController::class, 'history'])->name('history');
+    });
+
+    // CGroups
+    Route::prefix('cgroups')->name('cgroups.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\CgroupsController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\CgroupsController::class, 'install'])->name('install');
+        Route::post('/create', [\App\Http\Controllers\CgroupsController::class, 'createGroup'])->name('create');
+        Route::post('/delete', [\App\Http\Controllers\CgroupsController::class, 'deleteGroup'])->name('delete');
+        Route::post('/assign', [\App\Http\Controllers\CgroupsController::class, 'assignUser'])->name('assign');
+    });
+
+    // Network Config
+    Route::prefix('network')->name('network.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\NetworkController::class, 'index'])->name('index');
+        Route::post('/hostname', [\App\Http\Controllers\NetworkController::class, 'updateHostname'])->name('hostname');
+        Route::post('/dns', [\App\Http\Controllers\NetworkController::class, 'updateDns'])->name('dns');
+        Route::post('/add-ip', [\App\Http\Controllers\NetworkController::class, 'addIp'])->name('add-ip');
+        Route::post('/remove-ip', [\App\Http\Controllers\NetworkController::class, 'removeIp'])->name('remove-ip');
+    });
+
+    // MX Routing
+    Route::prefix('mx-routing')->name('mx-routing.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\MxRoutingController::class, 'index'])->name('index');
+        Route::post('/', [\App\Http\Controllers\MxRoutingController::class, 'update'])->name('update');
+    });
+
+    // Mail Auto-Reply
+    Route::prefix('mail-autoreply')->name('mail-autoreply.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\MailAutoReplyController::class, 'index'])->name('index');
+        Route::post('/', [\App\Http\Controllers\MailAutoReplyController::class, 'store'])->name('store');
+        Route::delete('/', [\App\Http\Controllers\MailAutoReplyController::class, 'destroy'])->name('destroy');
+    });
+
+    // Disk Quota
+    Route::prefix('disk-quota')->name('disk-quota.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\DiskQuotaController::class, 'index'])->name('index');
+        Route::post('/set', [\App\Http\Controllers\DiskQuotaController::class, 'setUserQuota'])->name('set');
+        Route::post('/remove', [\App\Http\Controllers\DiskQuotaController::class, 'removeUserQuota'])->name('remove');
+        Route::get('/report', [\App\Http\Controllers\DiskQuotaController::class, 'report'])->name('report');
+    });
+
+    // Nameservers
+    Route::prefix('nameservers')->name('nameservers.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\NameserverController::class, 'index'])->name('index');
+        Route::post('/', [\App\Http\Controllers\NameserverController::class, 'update'])->name('update');
+    });
+
+    // Process Monitor
+    Route::prefix('process-monitor')->name('process-monitor.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ProcessMonitorController::class, 'index'])->name('index');
+        Route::get('/top', [\App\Http\Controllers\ProcessMonitorController::class, 'top'])->name('top');
+        Route::post('/kill', [\App\Http\Controllers\ProcessMonitorController::class, 'kill'])->name('kill');
+        Route::get('/netstat', [\App\Http\Controllers\ProcessMonitorController::class, 'netstat'])->name('netstat');
+    });
+
+    // DNS Cluster
+    Route::prefix('dns-cluster')->name('dns-cluster.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\DnsClusterController::class, 'index'])->name('index');
+        Route::post('/add', [\App\Http\Controllers\DnsClusterController::class, 'addSlave'])->name('add');
+        Route::post('/remove', [\App\Http\Controllers\DnsClusterController::class, 'removeSlave'])->name('remove');
+        Route::post('/sync', [\App\Http\Controllers\DnsClusterController::class, 'sync'])->name('sync');
+    });
+
+    // Slave DNS
+    Route::prefix('slave-dns')->name('slave-dns.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\SlaveDnsController::class, 'index'])->name('index');
+        Route::post('/add', [\App\Http\Controllers\SlaveDnsController::class, 'add'])->name('add');
+        Route::post('/remove', [\App\Http\Controllers\SlaveDnsController::class, 'remove'])->name('remove');
+    });
+
+    // PHP.ini Editor
+    Route::prefix('phpini')->name('phpini.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PhpIniEditorController::class, 'index'])->name('index');
+        Route::post('/update', [\App\Http\Controllers\PhpIniEditorController::class, 'update'])->name('update');
+        Route::post('/save', [\App\Http\Controllers\PhpIniEditorController::class, 'saveFull'])->name('save');
+    });
+
+    // Live Monitor
+    Route::prefix('live-monitor')->name('live-monitor.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\LiveMonitorController::class, 'index'])->name('index');
+        Route::get('/data', [\App\Http\Controllers\LiveMonitorController::class, 'data'])->name('data');
+    });
+
+    // Tomcat
+    Route::prefix('tomcat-new')->name('tomcat-new.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\TomcatController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\TomcatController::class, 'install'])->name('install');
+        Route::post('/deploy', [\App\Http\Controllers\TomcatController::class, 'deploy'])->name('deploy');
+        Route::post('/undeploy', [\App\Http\Controllers\TomcatController::class, 'undeploy'])->name('undeploy');
+        Route::post('/service', [\App\Http\Controllers\TomcatController::class, 'service'])->name('service');
+        Route::get('/config', [\App\Http\Controllers\TomcatController::class, 'editConfig'])->name('config');
+        Route::post('/config', [\App\Http\Controllers\TomcatController::class, 'saveConfig'])->name('save-config');
+    });
+
+    // Config File Editor
+    Route::prefix('config-editor')->name('config-editor.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ConfigEditorController::class, 'index'])->name('index');
+        Route::post('/load', [\App\Http\Controllers\ConfigEditorController::class, 'load'])->name('load');
+        Route::post('/save', [\App\Http\Controllers\ConfigEditorController::class, 'save'])->name('save');
+        Route::post('/syntax-check', [\App\Http\Controllers\ConfigEditorController::class, 'syntaxCheck'])->name('syntax-check');
+    });
+
+    // FreeDNS
+    Route::prefix('freedns')->name('freedns.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\FreednsController::class, 'index'])->name('index');
+        Route::post('/add', [\App\Http\Controllers\FreednsController::class, 'addZone'])->name('add');
+        Route::post('/delete', [\App\Http\Controllers\FreednsController::class, 'deleteZone'])->name('delete');
+        Route::get('/edit', [\App\Http\Controllers\FreednsController::class, 'editZone'])->name('edit');
+        Route::post('/save', [\App\Http\Controllers\FreednsController::class, 'saveZone'])->name('save');
+    });
+
+    // Script Installer
+    Route::prefix('scripts')->name('scripts.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ScriptInstallerController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\ScriptInstallerController::class, 'install'])->name('install');
+        Route::post('/status', [\App\Http\Controllers\ScriptInstallerController::class, 'checkStatus'])->name('status');
+    });
+
+    // Startup Services
+    Route::prefix('startup-services')->name('startup-services.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\StartupServiceController::class, 'index'])->name('index');
+        Route::post('/toggle', [\App\Http\Controllers\StartupServiceController::class, 'toggle'])->name('toggle');
+    });
+
+    // Logrotate Manager
+    Route::prefix('logrotate')->name('logrotate.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\LogrotateController::class, 'index'])->name('index');
+        Route::get('/edit', [\App\Http\Controllers\LogrotateController::class, 'edit'])->name('edit');
+        Route::post('/save', [\App\Http\Controllers\LogrotateController::class, 'save'])->name('save');
+        Route::post('/test', [\App\Http\Controllers\LogrotateController::class, 'test'])->name('test');
+    });
+
+    // Fix Permissions
+    Route::prefix('fix-permissions')->name('fix-permissions.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\FixPermissionsController::class, 'index'])->name('index');
+        Route::post('/fix', [\App\Http\Controllers\FixPermissionsController::class, 'fix'])->name('fix');
+        Route::post('/fix-all', [\App\Http\Controllers\FixPermissionsController::class, 'fixAll'])->name('fix-all');
+    });
+
+    // Security Center
+    Route::prefix('security-center')->name('security-center.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\SecurityCenterController::class, 'index'])->name('index');
+        Route::post('/harden', [\App\Http\Controllers\SecurityCenterController::class, 'harden'])->name('harden');
+    });
+
+    // SysStat / SAR
+    Route::prefix('sysstat')->name('sysstat.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\SysStatController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\SysStatController::class, 'install'])->name('install');
+        Route::get('/report', [\App\Http\Controllers\SysStatController::class, 'report'])->name('report');
+    });
+
+    // Screen Manager
+    Route::prefix('screen')->name('screen.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\ScreenController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\ScreenController::class, 'install'])->name('install');
+        Route::post('/create', [\App\Http\Controllers\ScreenController::class, 'create'])->name('create');
+        Route::post('/kill', [\App\Http\Controllers\ScreenController::class, 'kill'])->name('kill');
+    });
+
+    // PHP Switcher
+    Route::prefix('php-switch')->name('php-switch.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PhpSwitchController::class, 'index'])->name('index');
+        Route::post('/switch', [\App\Http\Controllers\PhpSwitchController::class, 'switchVersion'])->name('switch');
+    });
+
+    // FFmpeg Installer
+    Route::prefix('ffmpeg')->name('ffmpeg.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\FfmpegController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\FfmpegController::class, 'install'])->name('install');
+        Route::post('/uninstall', [\App\Http\Controllers\FfmpegController::class, 'uninstall'])->name('uninstall');
+    });
+
+    // rDNS Checker
+    Route::prefix('rdns')->name('rdns.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\RdnsController::class, 'index'])->name('index');
+        Route::post('/check', [\App\Http\Controllers\RdnsController::class, 'check'])->name('check');
+    });
+
+    // Mail Explorer
+    Route::prefix('mail-explorer')->name('mail-explorer.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\MailExplorerController::class, 'index'])->name('index');
+        Route::get('/browse', [\App\Http\Controllers\MailExplorerController::class, 'browse'])->name('browse');
+        Route::get('/file', [\App\Http\Controllers\MailExplorerController::class, 'viewFile'])->name('file');
+    });
+
+    // Mass Email
+    Route::prefix('mass-email')->name('mass-email.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\MassEmailController::class, 'index'])->name('index');
+        Route::post('/send', [\App\Http\Controllers\MassEmailController::class, 'send'])->name('send');
+    });
+
+    // Netdata
+    Route::prefix('netdata')->name('netdata.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\NetdataController::class, 'index'])->name('index');
+        Route::post('/install', [\App\Http\Controllers\NetdataController::class, 'install'])->name('install');
+        Route::post('/toggle', [\App\Http\Controllers\NetdataController::class, 'toggle'])->name('toggle');
+    });
+
+    // DNS Zone Add
+    Route::prefix('dns-zone-add')->name('dns-zone-add.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\DnsZoneAddController::class, 'index'])->name('index');
+        Route::post('/store', [\App\Http\Controllers\DnsZoneAddController::class, 'store'])->name('store');
+    });
+
+    // Restore Backup
+    Route::prefix('restore-backup')->name('restore-backup.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\RestoreBackupController::class, 'index'])->name('index');
+        Route::post('/restore', [\App\Http\Controllers\RestoreBackupController::class, 'restore'])->name('restore');
+        Route::post('/upload', [\App\Http\Controllers\RestoreBackupController::class, 'upload'])->name('upload');
+    });
+
+    // WordPress Manager
+    Route::prefix('wordpress')->name('wordpress.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\WordPressController::class, 'index'])->name('index');
+        Route::get('/create', [\App\Http\Controllers\WordPressController::class, 'create'])->name('create');
+        Route::post('/', [\App\Http\Controllers\WordPressController::class, 'store'])->name('store');
+        Route::get('/{site}', [\App\Http\Controllers\WordPressController::class, 'show'])->name('show');
+        Route::post('/{site}/update-core', [\App\Http\Controllers\WordPressController::class, 'updateCore'])->name('update-core');
+        Route::post('/{site}/update-plugins', [\App\Http\Controllers\WordPressController::class, 'updatePlugins'])->name('update-plugins');
+        Route::post('/{site}/update-themes', [\App\Http\Controllers\WordPressController::class, 'updateThemes'])->name('update-themes');
+        Route::post('/{site}/backup', [\App\Http\Controllers\WordPressController::class, 'backup'])->name('backup');
+        Route::post('/{site}/restore', [\App\Http\Controllers\WordPressController::class, 'restore'])->name('restore');
+        Route::post('/{site}/clone', [\App\Http\Controllers\WordPressController::class, 'cloneSite'])->name('clone');
+        Route::post('/{site}/staging', [\App\Http\Controllers\WordPressController::class, 'createStaging'])->name('staging');
+        Route::post('/{site}/push-staging', [\App\Http\Controllers\WordPressController::class, 'pushStaging'])->name('push-staging');
+        Route::post('/{site}/scan', [\App\Http\Controllers\WordPressController::class, 'securityScan'])->name('scan');
+        Route::post('/{site}/secure', [\App\Http\Controllers\WordPressController::class, 'secure'])->name('secure');
+        Route::post('/{site}/repair-permissions', [\App\Http\Controllers\WordPressController::class, 'repairPermissions'])->name('repair-permissions');
+        Route::post('/{site}/enable-redis', [\App\Http\Controllers\WordPressController::class, 'enableRedis'])->name('enable-redis');
+        Route::post('/{site}/disable-redis', [\App\Http\Controllers\WordPressController::class, 'disableRedis'])->name('disable-redis');
+        Route::post('/{site}/purge-cache', [\App\Http\Controllers\WordPressController::class, 'purgeCache'])->name('purge-cache');
+        Route::post('/{site}/suspend', [\App\Http\Controllers\WordPressController::class, 'suspend'])->name('suspend');
+        Route::post('/{site}/unsuspend', [\App\Http\Controllers\WordPressController::class, 'unsuspend'])->name('unsuspend');
+        Route::post('/{site}/enable-ssl', [\App\Http\Controllers\WordPressController::class, 'enableSsl'])->name('enable-ssl');
+        Route::delete('/{site}', [\App\Http\Controllers\WordPressController::class, 'delete'])->name('delete');
+        // Performance routes
+        Route::get('/{site}/performance', [\App\Http\Controllers\WordPressController::class, 'performanceReport'])->name('performance');
+        Route::post('/{site}/flush-redis', [\App\Http\Controllers\WordPressController::class, 'flushRedis'])->name('flush-redis');
+        Route::post('/{site}/varnish-test', [\App\Http\Controllers\WordPressController::class, 'varnishTest'])->name('varnish-test');
+        Route::post('/{site}/purge-varnish', [\App\Http\Controllers\WordPressController::class, 'purgeVarnish'])->name('purge-varnish');
+        Route::post('/{site}/apply-profile', [\App\Http\Controllers\WordPressController::class, 'applyProfile'])->name('apply-profile');
+        Route::post('/{site}/reset-profile', [\App\Http\Controllers\WordPressController::class, 'resetProfile'])->name('reset-profile');
+        Route::post('/{site}/update-php-fpm', [\App\Http\Controllers\WordPressController::class, 'updatePhpFpm'])->name('update-php-fpm');
+        Route::get('/{site}/cron', [\App\Http\Controllers\WordPressController::class, 'cronStatus'])->name('cron');
+        Route::post('/{site}/cron-run', [\App\Http\Controllers\WordPressController::class, 'cronRunNow'])->name('cron-run');
+        Route::post('/{site}/cron-toggle', [\App\Http\Controllers\WordPressController::class, 'cronToggle'])->name('cron-toggle');
+    });
+});
+
+// Reseller Panel (ports 2082/2083)
+Route::middleware(['auth', \App\Http\Middleware\ResellerMiddleware::class])->prefix('reseller')->name('reseller.')->group(function () {
+    Route::get('/dashboard', [\App\Http\Controllers\Reseller\ResellerDashboardController::class, 'index'])->name('dashboard');
+    Route::get('/accounts', [\App\Http\Controllers\Reseller\ResellerDashboardController::class, 'accounts'])->name('accounts');
+    Route::get('/accounts/create', [\App\Http\Controllers\Reseller\ResellerDashboardController::class, 'createAccount'])->name('accounts.create');
+    Route::post('/accounts', [\App\Http\Controllers\Reseller\ResellerDashboardController::class, 'storeAccount'])->name('accounts.store');
 });
 
 // REST API (no CSRF, outside auth middleware)
 Route::any('/v1', [\App\Http\Controllers\LegacyApiController::class, 'handle']);
 Route::any('/v1/', [\App\Http\Controllers\LegacyApiController::class, 'handle']);
 
-// User Panel (port 2083) - accessible by both admin and regular users
+// User Panel (ports 2082/2083) - accessible by both admin and regular users
 Route::middleware(['auth', \App\Http\Middleware\UserMiddleware::class])->prefix('user')->name('user.')->group(function () {
     Route::get('/dashboard', [UserDashboardController::class, 'index'])->name('dashboard');
 
@@ -781,4 +1175,28 @@ Route::middleware(['auth', \App\Http\Middleware\UserMiddleware::class])->prefix(
     Route::get('/backups/download', [UserBackupController::class, 'download'])->name('backups.download');
     Route::post('/backups/restore', [UserBackupController::class, 'restore'])->name('backups.restore');
     Route::post('/backups/delete', [UserBackupController::class, 'delete'])->name('backups.delete');
+
+    // WordPress
+    Route::get('/wordpress', [UserWordPressController::class, 'index'])->name('wordpress.index');
+    Route::get('/wordpress/create', [UserWordPressController::class, 'create'])->name('wordpress.create');
+    Route::post('/wordpress', [UserWordPressController::class, 'store'])->name('wordpress.store');
+    Route::get('/wordpress/{site}', [UserWordPressController::class, 'show'])->name('wordpress.show');
+    Route::post('/wordpress/{site}/backup', [UserWordPressController::class, 'backup'])->name('wordpress.backup');
+    Route::post('/wordpress/{site}/restore', [UserWordPressController::class, 'restore'])->name('wordpress.restore');
+    Route::post('/wordpress/{site}/staging', [UserWordPressController::class, 'createStaging'])->name('wordpress.staging');
+    Route::post('/wordpress/{site}/purge-cache', [UserWordPressController::class, 'purgeCache'])->name('wordpress.purge-cache');
+    Route::post('/wordpress/{site}/enable-redis', [UserWordPressController::class, 'enableRedis'])->name('wordpress.enable-redis');
+    Route::post('/wordpress/{site}/disable-redis', [UserWordPressController::class, 'disableRedis'])->name('wordpress.disable-redis');
+    Route::post('/wordpress/{site}/update-core', [UserWordPressController::class, 'updateCore'])->name('wordpress.update-core');
+    Route::post('/wordpress/{site}/update-plugins', [UserWordPressController::class, 'updatePlugins'])->name('wordpress.update-plugins');
+    Route::post('/wordpress/{site}/scan', [UserWordPressController::class, 'securityScan'])->name('wordpress.scan');
+    // User performance routes
+    Route::get('/wordpress/{site}/performance', [UserWordPressController::class, 'performance'])->name('wordpress.performance');
+    Route::post('/wordpress/{site}/flush-redis', [UserWordPressController::class, 'flushRedis'])->name('wordpress.flush-redis');
+    Route::post('/wordpress/{site}/varnish-test', [UserWordPressController::class, 'varnishTest'])->name('wordpress.varnish-test');
+    Route::post('/wordpress/{site}/purge-varnish', [UserWordPressController::class, 'purgeVarnish'])->name('wordpress.purge-varnish');
+    Route::post('/wordpress/{site}/apply-profile', [UserWordPressController::class, 'applyProfile'])->name('wordpress.apply-profile');
+    Route::post('/wordpress/{site}/update-php-fpm', [UserWordPressController::class, 'updatePhpFpm'])->name('wordpress.update-php-fpm');
+    Route::post('/wordpress/{site}/cron-run', [UserWordPressController::class, 'cronRunNow'])->name('wordpress.cron-run');
+    Route::post('/wordpress/{site}/cron-toggle', [UserWordPressController::class, 'cronToggle'])->name('wordpress.cron-toggle');
 });

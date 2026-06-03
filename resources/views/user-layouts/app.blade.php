@@ -116,6 +116,24 @@
                         <i class="fas fa-hdd w-5 text-center mr-3"></i>
                         <span>Backups</span>
                     </a>
+
+                    <a href="{{ route('user.wordpress.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('user.wordpress.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fab fa-wordpress w-5 text-center mr-3"></i>
+                        <span>WordPress</span>
+                    </a>
+
+                    @if(auth()->user()->isReseller())
+                    <hr class="my-2 border-gray-200">
+                    <p class="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Reseller</p>
+                    <a href="{{ route('reseller.dashboard') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('reseller.dashboard') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-users-cog w-5 text-center mr-3 text-purple-600"></i>
+                        <span>Reseller Dashboard</span>
+                    </a>
+                    <a href="{{ route('reseller.accounts') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('reseller.accounts*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-users w-5 text-center mr-3 text-purple-600"></i>
+                        <span>Manage Accounts</span>
+                    </a>
+                    @endif
                 </div>
             </nav>
 
@@ -161,8 +179,8 @@
                         <h1 class="ml-3 text-xl font-semibold text-gray-800">@yield('title', 'Dashboard')</h1>
                     </div>
                     <div class="flex items-center space-x-4">
-                        <span class="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                            <i class="fas fa-circle text-emerald-400 mr-1.5 text-[6px]"></i> User Panel
+                        <span class="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-medium {{ auth()->user()->isReseller() ? 'bg-purple-100 text-purple-800' : 'bg-emerald-100 text-emerald-800' }}">
+                            <i class="fas fa-circle {{ auth()->user()->isReseller() ? 'text-purple-400' : 'text-emerald-400' }} mr-1.5 text-[6px]"></i> {{ auth()->user()->isReseller() ? 'Reseller Panel' : 'User Panel' }}
                         </span>
                         <div class="relative" x-data="{ open: false }">
                             <button @click="open = !open" class="flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-100">

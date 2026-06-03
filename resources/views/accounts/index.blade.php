@@ -38,23 +38,21 @@
                 </thead>
                 <tbody class="divide-y divide-gray-100">
                     @forelse($accounts as $account)
+                    @php $a = (object) $account; $suspended = ($a->status ?? 'active') === 'suspended'; @endphp
                     <tr class="hover:bg-gray-50">
                         <td class="px-5 py-3">
-                            <a href="{{ route('accounts.show', $account) }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-800">{{ $account->domain }}</a>
+                            <a href="{{ route('accounts.show', $a->username) }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-800">{{ $a->domain }}</a>
                         </td>
-                        <td class="px-5 py-3 text-sm text-gray-700">{{ $account->user->username ?? '-' }}</td>
-                        <td class="px-5 py-3 text-sm text-gray-600 font-mono">{{ $account->ip_address }}</td>
-                        <td class="px-5 py-3 text-sm text-gray-600">{{ $account->package->name ?? '-' }}</td>
+                        <td class="px-5 py-3 text-sm text-gray-700">{{ $a->username }}</td>
+                        <td class="px-5 py-3 text-sm text-gray-600 font-mono">{{ $a->ip_address }}</td>
+                        <td class="px-5 py-3 text-sm text-gray-600">{{ $a->package ?? '-' }}</td>
                         <td class="px-5 py-3">
                             <div class="w-24">
-                                <div class="text-xs text-gray-500 mb-1">{{ $account->disk_usage_formatted }}</div>
-                                <div class="w-full bg-gray-200 rounded-full h-1.5">
-                                    <div class="bg-indigo-500 h-1.5 rounded-full" @style(['width:'.$account->disk_usage_percent.'%'])></div>
-                                </div>
+                                <div class="text-xs text-gray-500 mb-1">{{ $a->disk_limit ?? 0 }} MB</div>
                             </div>
                         </td>
                         <td class="px-5 py-3">
-                            @if($account->isSuspended())
+                            @if($suspended)
                                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Suspended</span>
                             @else
                                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
@@ -62,28 +60,28 @@
                         </td>
                         <td class="px-5 py-3 text-right">
                             <div class="flex items-center justify-end gap-1">
-                                <a href="{{ route('accounts.show', $account) }}" class="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50" title="View">
+                                <a href="{{ route('accounts.show', $a->username) }}" class="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50" title="View">
                                     <i class="fas fa-eye text-sm"></i>
                                 </a>
-                                <a href="{{ route('accounts.edit', $account) }}" class="p-2 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50" title="Edit">
+                                <a href="{{ route('accounts.edit', $a->username) }}" class="p-2 text-gray-400 hover:text-blue-600 rounded-lg hover:bg-blue-50" title="Edit">
                                     <i class="fas fa-edit text-sm"></i>
                                 </a>
-                                @if($account->isSuspended())
-                                    <form method="POST" action="{{ route('accounts.unsuspend', $account) }}" class="inline">
+                                @if($suspended)
+                                    <form method="POST" action="{{ route('accounts.unsuspend', $a->username) }}" class="inline">
                                         @csrf
                                         <button type="submit" class="p-2 text-gray-400 hover:text-green-600 rounded-lg hover:bg-green-50" title="Unsuspend">
                                             <i class="fas fa-play text-sm"></i>
                                         </button>
                                     </form>
                                 @else
-                                    <form method="POST" action="{{ route('accounts.suspend', $account) }}" class="inline">
+                                    <form method="POST" action="{{ route('accounts.suspend', $a->username) }}" class="inline">
                                         @csrf
                                         <button type="submit" class="p-2 text-gray-400 hover:text-yellow-600 rounded-lg hover:bg-yellow-50" title="Suspend">
                                             <i class="fas fa-pause text-sm"></i>
                                         </button>
                                     </form>
                                 @endif
-                                <form method="POST" action="{{ route('accounts.destroy', $account) }}" onsubmit="return confirm('Are you sure you want to delete this account?')" class="inline">
+                                <form method="POST" action="{{ route('accounts.destroy', $a->username) }}" onsubmit="return confirm('Are you sure you want to delete this account?')" class="inline">
                                     @csrf @method('DELETE')
                                     <button type="submit" class="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50" title="Delete">
                                         <i class="fas fa-trash text-sm"></i>

@@ -2,51 +2,57 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\UserAccount;
-use App\Models\Domain;
-use App\Models\DnsZone;
-use App\Models\MysqlDatabase;
-use App\Models\EmailAccount;
-use App\Models\Service;
-use App\Models\Notification;
-use App\Models\SslCertificate;
+use App\Services\AccountService;
+use App\Services\ShellService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Process\Factory as ProcessFactory;
 
 class DashboardController extends Controller
 {
+    protected function process(): ProcessFactory
+    {
+        return app(ProcessFactory::class);
+    }
     public function index()
     {
-        $stats = [
-            'total_accounts' => UserAccount::count(),
-            'active_accounts' => UserAccount::where('suspended', 'no')->count(),
-            'suspended_accounts' => UserAccount::where('suspended', 'yes')->count(),
-            'total_domains' => Domain::count(),
-            'ssl_domains' => Domain::where('ssl_enabled', true)->count(),
-            'dns_zones' => DnsZone::count(),
-            'databases' => MysqlDatabase::count(),
-            'email_accounts' => EmailAccount::count(),
-            'total_services' => Service::count(),
-            'running_services' => Service::where('status', 'running')->count(),
-            'expired_ssl' => SslCertificate::where('expires_at', '<', now())->count(),
-            'expiring_ssl' => SslCertificate::whereBetween('expires_at', [now(), now()->addDays(30)])->count(),
-        ];
+        $accounts = $this->getAccountStats();
+        $system = $this->getSystemStats();
 
-        $services = Service::orderBy('display_name')->get();
+        return view('dashboard', compact('accounts', 'system'));
+    }
 
-        $recentNotifications = Notification::where('is_read', false)
-            ->latest()
-            ->limit(10)
-            ->get();
+    protected function getAccountStats(): array
+    {
+        $total = 0;
+        $active = 0;
+        $suspended = 0;
 
-        $diskUsage = $this->getDiskUsage();
-        $memoryUsage = $this->getMemoryUsage();
-        $swapUsage = $this->getSwapUsage();
-        $cpuLoad = $this->getCpuLoad();
+        try {
+            $rows = DB::connection('sqlite')->table('accounts')->get();
+            $total = $rows->count();
+            $active = $rows->where('status', 'active')->count();
+            $suspended = $rows->where('status', 'suspended')->count();
+        } catch (\Exception $e) {
+            $result = $this->process()->run("awk -F: '(\$3 >= 1000 && \$3 < 65534) {print \$1}' /etc/passwd | wc -l");
+            $total = (int) trim($result->output());
+            $active = $total;
+        }
 
-        return view('dashboard', compact(
-            'stats', 'services', 'recentNotifications',
-            'diskUsage', 'memoryUsage', 'swapUsage', 'cpuLoad'
-        ));
+        return compact('total', 'active', 'suspended');
+    }
+
+    protected function getSystemStats(): array
+    {
+        $disk = $this->getDiskUsage();
+        $memory = $this->getMemoryUsage();
+        $swap = $this->getSwapUsage();
+        $cpu = $this->getCpuLoad();
+        $uptime = trim($this->process()->run('uptime -p')->output() ?: 'unknown');
+        $hostname = trim($this->process()->run('hostname -f')->output() ?: 'unknown');
+        $os = trim($this->process()->run("cat /etc/os-release | grep PRETTY_NAME | cut -d'\"' -f2")->output() ?: 'Linux');
+        $kernel = trim($this->process()->run('uname -r')->output() ?: '');
+
+        return compact('disk', 'memory', 'swap', 'cpu', 'uptime', 'hostname', 'os', 'kernel');
     }
 
     private function getDiskUsage(): array
@@ -56,61 +62,52 @@ class DashboardController extends Controller
         $used = $total - $free;
         $percent = $total > 0 ? round(($used / $total) * 100, 1) : 0;
         return [
-            'total' => $total,
-            'used' => $used,
-            'free' => $free,
+            'total' => $this->formatBytes($total),
+            'used' => $this->formatBytes($used),
+            'free' => $this->formatBytes($free),
             'percent' => $percent,
-            'color' => self::diskColor($percent),
-            'total_fmt' => self::formatBytes($total),
-            'used_fmt' => self::formatBytes($used),
-            'free_fmt' => self::formatBytes($free),
+            'color' => $this->colorThreshold($percent, [75, 85, 90, 95]),
         ];
     }
 
     private function getMemoryUsage(): array
     {
-        $meminfo = self::parseMeminfo();
+        $meminfo = $this->parseMeminfo();
         $total = $meminfo['MemTotal'] ?? 0;
         $free = $meminfo['MemFree'] ?? 0;
         $buffers = $meminfo['Buffers'] ?? 0;
         $cached = $meminfo['Cached'] ?? 0;
-        $used = $total - $free - $buffers - $cached;
+        $used = max(0, $total - $free - $buffers - $cached);
         $percent = $total > 0 ? round(($used / $total) * 100, 1) : 0;
         return [
-            'total' => $total,
-            'used' => max(0, $used),
-            'free' => $free + $buffers + $cached,
+            'total' => $this->formatBytes($total * 1024),
+            'used' => $this->formatBytes($used * 1024),
+            'free' => $this->formatBytes(($free + $buffers + $cached) * 1024),
             'percent' => $percent,
-            'color' => self::memoryColor($percent),
-            'total_fmt' => self::formatBytes($total * 1024),
-            'used_fmt' => self::formatBytes(max(0, $used) * 1024),
-            'free_fmt' => self::formatBytes(($free + $buffers + $cached) * 1024),
+            'color' => $this->colorThreshold($percent, [50, 70, 80, 90]),
         ];
     }
 
     private function getSwapUsage(): array
     {
-        $meminfo = self::parseMeminfo();
+        $meminfo = $this->parseMeminfo();
         $total = $meminfo['SwapTotal'] ?? 0;
         $free = $meminfo['SwapFree'] ?? 0;
         $used = $total - $free;
         $percent = $total > 0 ? round(($used / $total) * 100, 1) : 0;
         return [
-            'total' => $total,
-            'used' => $used,
-            'free' => $free,
+            'total' => $this->formatBytes($total * 1024),
+            'used' => $this->formatBytes($used * 1024),
+            'free' => $this->formatBytes($free * 1024),
             'percent' => $percent,
-            'color' => self::swapColor($percent),
-            'total_fmt' => self::formatBytes($total * 1024),
-            'used_fmt' => self::formatBytes($used * 1024),
-            'free_fmt' => self::formatBytes($free * 1024),
+            'color' => $this->colorThreshold($percent, [20, 50, 70, 85]),
         ];
     }
 
     private function getCpuLoad(): array
     {
         $load = sys_getloadavg();
-        $cpuCount = (int) trim(shell_exec('nproc') ?: '1');
+        $cpuCount = (int) trim(ShellService::exec('nproc') ?: '1');
         $loadPercent = $cpuCount > 0 ? round(($load[0] ?? 0) / $cpuCount * 100, 1) : 0;
         return [
             '1min' => $load[0] ?? 0,
@@ -118,11 +115,11 @@ class DashboardController extends Controller
             '15min' => $load[2] ?? 0,
             'cores' => $cpuCount,
             'percent' => min(100, $loadPercent),
-            'color' => self::cpuColor($loadPercent),
+            'color' => $this->colorThreshold($loadPercent, [25, 50, 75, 90]),
         ];
     }
 
-    private static function parseMeminfo(): array
+    private function parseMeminfo(): array
     {
         $meminfo = [];
         if (file_exists('/proc/meminfo')) {
@@ -136,42 +133,16 @@ class DashboardController extends Controller
         return $meminfo;
     }
 
-    private static function memoryColor(float $percent): string
+    private function colorThreshold(float $percent, array $thresholds): string
     {
-        if ($percent <= 50) return 'green';
-        if ($percent <= 70) return 'blue';
-        if ($percent <= 80) return 'yellow';
-        if ($percent <= 90) return 'orange';
+        $colors = ['green', 'blue', 'yellow', 'orange', 'red'];
+        foreach ($thresholds as $i => $threshold) {
+            if ($percent <= $threshold) return $colors[$i] ?? 'red';
+        }
         return 'red';
     }
 
-    private static function swapColor(float $percent): string
-    {
-        if ($percent <= 20) return 'green';
-        if ($percent <= 50) return 'blue';
-        if ($percent <= 70) return 'yellow';
-        return 'red';
-    }
-
-    private static function diskColor(float $percent): string
-    {
-        if ($percent <= 75) return 'green';
-        if ($percent <= 85) return 'blue';
-        if ($percent <= 90) return 'yellow';
-        if ($percent <= 95) return 'orange';
-        return 'red';
-    }
-
-    private static function cpuColor(float $percent): string
-    {
-        if ($percent <= 25) return 'green';
-        if ($percent <= 50) return 'blue';
-        if ($percent <= 75) return 'yellow';
-        if ($percent <= 90) return 'orange';
-        return 'red';
-    }
-
-    private static function formatBytes(int $bytes, int $precision = 2): string
+    private function formatBytes(int $bytes, int $precision = 2): string
     {
         if ($bytes <= 0) return '0 B';
         $units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];

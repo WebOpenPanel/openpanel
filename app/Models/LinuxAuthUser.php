@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ShellService;
 use Illuminate\Contracts\Auth\Authenticatable;
 
 class LinuxAuthUser implements Authenticatable
@@ -53,34 +54,20 @@ class LinuxAuthUser implements Authenticatable
 
     public static function verifyPassword(string $username, string $password): bool
     {
-        $helper = '/usr/local/openpanel/bin/auth-check';
-        if (!file_exists($helper)) {
-            return false;
+        if (!file_exists('/etc/shadow')) return false;
+
+        $lines = file('/etc/shadow', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            $parts = explode(':', $line);
+            if ($parts[0] === $username && count($parts) >= 2) {
+                $hash = $parts[1];
+                if ($hash === '!!' || $hash === '!' || $hash === '*' || $hash === '') {
+                    return false;
+                }
+                return crypt($password, $hash) === $hash;
+            }
         }
-
-        $descriptors = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
-
-        $process = proc_open(
-            [$helper, $username, $password],
-            $descriptors,
-            $pipes,
-            '/'
-        );
-
-        if (!is_resource($process)) {
-            return false;
-        }
-
-        fclose($pipes[0]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-
-        $exitCode = proc_close($process);
-        return $exitCode === 0;
+        return false;
     }
 
     public static function isRootOrSudo(string $username): bool
@@ -89,8 +76,53 @@ class LinuxAuthUser implements Authenticatable
         if (!$user) return false;
         if ($user->uid === 0) return true;
 
-        $groups = shell_exec("groups {$username} 2>/dev/null") ?: '';
+        $groups = ShellService::exec('groups ' . escapeshellarg($username) . ' 2>/dev/null');
         return str_contains($groups, 'wheel') || str_contains($groups, 'sudo');
+    }
+
+    public static function isResellerUser(string $username): bool
+    {
+        $groups = ShellService::exec('groups ' . escapeshellarg($username) . ' 2>/dev/null');
+        return str_contains($groups, 'reseller');
+    }
+
+    public static function getRole(string $username): string
+    {
+        if (self::isRootOrSudo($username)) return 'admin';
+        if (self::isResellerUser($username)) return 'reseller';
+        return 'user';
+    }
+
+    public static function all(): array
+    {
+        if (!file_exists('/etc/passwd')) return [];
+        $users = [];
+        $lines = file('/etc/passwd', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            $user = self::fromPasswdLine($line);
+            if ($user && $user->uid >= 1000 && $user->shell !== '/sbin/nologin' && $user->shell !== '/usr/sbin/nologin') {
+                $users[] = $user;
+            }
+        }
+        return $users;
+    }
+
+    public static function resellers(): array
+    {
+        return array_filter(self::all(), fn($u) => self::isResellerUser($u->username));
+    }
+
+    public static function clients(): array
+    {
+        return array_filter(self::all(), fn($u) => !self::isRootOrSudo($u->username) && !self::isResellerUser($u->username));
+    }
+
+    public static function createReseller(string $username, string $password): bool
+    {
+        $result = ShellService::exec("useradd -m -d /home/{$username} -s /bin/bash -G reseller {$username} 2>&1");
+        if ($result !== '' && str_contains($result, 'error')) return false;
+        ShellService::exec("echo '{$username}:{$password}' | chpasswd 2>&1");
+        return true;
     }
 
     public function getAuthIdentifierName(): string
@@ -149,12 +181,34 @@ class LinuxAuthUser implements Authenticatable
 
     public function isAdmin(): bool
     {
-        return $this->uid === 0 || self::isRootOrSudo($this->username);
+        return self::isRootOrSudo($this->username);
+    }
+
+    public function isReseller(): bool
+    {
+        return self::isResellerUser($this->username);
+    }
+
+    public function isUser(): bool
+    {
+        return !$this->isAdmin() && !$this->isReseller();
     }
 
     public function role(): string
     {
-        return $this->isAdmin() ? 'admin' : 'user';
+        return self::getRole($this->username);
+    }
+
+    public function canManageUser(string $targetUsername): bool
+    {
+        if ($this->isAdmin()) return true;
+        if (!$this->isReseller()) return false;
+
+        $homeDir = "/home/{$targetUsername}";
+        if (!is_dir($homeDir)) return false;
+
+        $owner = fileowner($homeDir);
+        return $owner === $this->uid;
     }
 
     public function __get(string $key): mixed

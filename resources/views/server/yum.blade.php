@@ -27,7 +27,13 @@
         @if(!empty($packages))
         <div class="max-h-64 overflow-auto"><table class="w-full text-xs"><tbody class="divide-y">
             @foreach($packages as $pkg)
-            <tr class="hover:bg-gray-50"><td class="py-1.5 px-2 font-mono">{{ $pkg }}</td></tr>
+            <tr class="hover:bg-gray-50">
+                <td class="py-1.5 px-2 font-mono">{{ is_array($pkg) ? ($pkg['name'] ?? $pkg) : $pkg }}</td>
+                @if(is_array($pkg))
+                <td class="py-1.5 px-2 text-gray-500">{{ $pkg['version'] ?? '' }}</td>
+                <td class="py-1.5 px-2 text-gray-400">{{ $pkg['repo'] ?? '' }}</td>
+                @endif
+            </tr>
             @endforeach
         </tbody></table></div>
         @endif

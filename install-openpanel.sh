@@ -56,18 +56,24 @@ detect_os() {
 check_existing() {
     if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/artisan" ]; then
         warn "OpenPanel is already installed at $INSTALL_DIR"
-        read -p "Reinstall/upgrade? (y/N): " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            exit 0
+        if [[ "${NON_INTERACTIVE:-}" == "y" ]]; then
+            log "Non-interactive mode: proceeding with reinstall/upgrade..."
+        else
+            read -p "Reinstall/upgrade? (y/N): " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                exit 0
+            fi
         fi
         log "Proceeding with reinstall/upgrade..."
     fi
 
     if [ -e "/usr/local/cwpsrv/" ]; then
         warn "Legacy CWP detected at /usr/local/cwpsrv/. OpenPanel will be installed alongside."
-        read -p "Continue? (y/N): " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            exit 0
+        if [[ "${NON_INTERACTIVE:-}" != "y" ]]; then
+            read -p "Continue? (y/N): " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                exit 0
+            fi
         fi
     fi
 }
@@ -92,35 +98,49 @@ gather_config() {
     echo -e "${BLUE}=== OpenPanel Installation Configuration ===${NC}"
     echo ""
 
-    read -p "MySQL root password (leave blank to auto-generate): " MYSQL_ROOT_PASSWORD
-    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-        MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
-        log "Generated MySQL root password: $MYSQL_ROOT_PASSWORD"
+    if [[ "${NON_INTERACTIVE:-}" == "y" ]]; then
+        MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)}"
+        DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+        ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+        SERVER_IP="${SERVER_IP:-$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)}"
+        ENABLE_SSL="${ENABLE_SSL:-Y}"
+        INSTALL_MAIL="${INSTALL_MAIL:-Y}"
+        DO_RESTART="${DO_RESTART:-N}"
+        log "Non-interactive mode: using environment variables / defaults"
+    else
+        read -p "MySQL root password (leave blank to auto-generate): " MYSQL_ROOT_PASSWORD
+        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+            MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+            log "Generated MySQL root password: $MYSQL_ROOT_PASSWORD"
+        fi
+
+        DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
+
+        read -p "Set root password for admin panel (leave blank to keep current): " ROOT_PASSWORD
+        echo ""
+
+        read -p "Server IP (auto-detected): " SERVER_IP
+        if [ -z "$SERVER_IP" ]; then
+            SERVER_IP=$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+        fi
+
+        read -p "Enable SSL for panel? (Y/n): " ENABLE_SSL
+        ENABLE_SSL="${ENABLE_SSL:-Y}"
+
+        read -p "Install mail server (Postfix/Dovecot)? (Y/n): " INSTALL_MAIL
+        INSTALL_MAIL="${INSTALL_MAIL:-Y}"
+
+        read -p "Restart server after install? (y/N): " DO_RESTART
+        DO_RESTART="${DO_RESTART:-N}"
     fi
 
-    DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
-
-    read -p "Set root password for admin panel (leave blank to keep current): " ROOT_PASSWORD
-    echo ""
-    if [ -n "$ROOT_PASSWORD" ]; then
+    if [ -n "${ROOT_PASSWORD:-}" ]; then
         echo "root:${ROOT_PASSWORD}" | chpasswd 2>&1
         log "Root password updated"
     fi
 
-    read -p "Server IP (auto-detected): " SERVER_IP
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-    fi
     log "Server IP: $SERVER_IP"
-
-    read -p "Enable SSL for panel? (Y/n): " ENABLE_SSL
-    ENABLE_SSL="${ENABLE_SSL:-Y}"
-
-    read -p "Install mail server (Postfix/Dovecot)? (Y/n): " INSTALL_MAIL
-    INSTALL_MAIL="${INSTALL_MAIL:-Y}"
-
-    read -p "Restart server after install? (y/N): " DO_RESTART
-    DO_RESTART="${DO_RESTART:-N}"
+    log "SSL: $ENABLE_SSL, Mail: $INSTALL_MAIL"
 }
 
 install_repos() {
@@ -618,6 +638,128 @@ EOSQL
     log "Mail server installed"
 }
 
+install_dns() {
+    step "Installing DNS Server (BIND)"
+
+    dnf -y install bind bind-utils 2>&1 | tee -a "$LOG_FILE"
+
+    if [ -f /etc/named.conf ]; then
+        cp /etc/named.conf /etc/named.conf.bak.$(date +%s) 2>/dev/null || true
+    fi
+
+    # Allow queries from localhost and local networks
+    if ! grep -q "allow-query.*localhost" /etc/named.conf 2>/dev/null; then
+        sed -i 's/listen-on port 53.*/listen-on port 53 { 127.0.0.1; any; };/' /etc/named.conf 2>/dev/null || true
+        sed -i 's/listen-on-v6.*/listen-on-v6 port 53 { ::1; any; };/' /etc/named.conf 2>/dev/null || true
+        sed -i 's/allow-query.*/allow-query { localhost; any; };/' /etc/named.conf 2>/dev/null || true
+    fi
+
+    systemctl enable named
+    systemctl restart named 2>&1 | tee -a "$LOG_FILE" || warn "Named failed to start"
+
+    log "BIND DNS installed"
+}
+
+install_ftp() {
+    step "Installing FTP Server (Pure-FTPd)"
+
+    dnf -y install pure-ftpd 2>&1 | tee -a "$LOG_FILE"
+
+    if [ -f /etc/pure-ftpd/pure-ftpd.conf ]; then
+        cp /etc/pure-ftpd/pure-ftpd.conf /etc/pure-ftpd/pure-ftpd.conf.bak.$(date +%s) 2>/dev/null || true
+        sed -i 's/^# PureDB/PureDB/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
+        sed -i 's/^# NoAnonymous/NoAnonymous/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
+    fi
+
+    # Create required directories
+    mkdir -p /etc/pure-ftpd
+    echo "yes" > /etc/pure-ftpd/no_unix_privs 2>/dev/null || true
+
+    systemctl enable pure-ftpd
+    systemctl restart pure-ftpd 2>&1 | tee -a "$LOG_FILE" || warn "Pure-FTPd failed to start"
+
+    log "Pure-FTPd installed"
+}
+
+install_firewall() {
+    step "Configuring Firewall"
+
+    dnf -y install firewalld 2>&1 | tee -a "$LOG_FILE"
+
+    systemctl enable firewalld
+    systemctl start firewalld 2>&1 | tee -a "$LOG_FILE" || warn "Firewalld failed to start"
+
+    if systemctl is-active --quiet firewalld; then
+        # Open required ports
+        local ports=(
+            22/tcp    # SSH
+            80/tcp    # HTTP
+            443/tcp   # HTTPS
+            53/tcp    # DNS
+            53/udp    # DNS
+            21/tcp    # FTP
+            2082/tcp  # User panel HTTP
+            2083/tcp  # User panel HTTPS
+            2086/tcp  # Admin panel HTTP
+            2087/tcp  # Admin panel HTTPS
+            2095/tcp  # Webmail HTTP
+            2096/tcp  # Webmail HTTPS
+            30000:31000/tcp  # FTP passive
+        )
+        for port in "${ports[@]}"; do
+            firewall-cmd --permanent --add-port="$port" 2>/dev/null || true
+        done
+        firewall-cmd --reload 2>&1 | tee -a "$LOG_FILE"
+        log "Firewall configured"
+    else
+        warn "Firewalld not active, skipping firewall configuration"
+    fi
+}
+
+install_wp_cli() {
+    step "Installing WP-CLI"
+
+    if ! command -v wp &>/dev/null; then
+        curl -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar 2>&1 | tee -a "$LOG_FILE"
+        chmod +x /usr/local/bin/wp
+    fi
+
+    if command -v wp &>/dev/null; then
+        log "WP-CLI installed at /usr/local/bin/wp"
+    else
+        warn "WP-CLI installation failed"
+    fi
+}
+
+install_redis() {
+    step "Installing Redis"
+
+    dnf -y install redis 2>&1 | tee -a "$LOG_FILE"
+
+    if ! command -v redis-server &>/dev/null; then
+        warn "Redis installation failed"
+        return 1
+    fi
+
+    if [ -f /etc/redis/redis.conf ] || [ -f /etc/redis.conf ]; then
+        REDIS_CONF=$( [ -f /etc/redis/redis.conf ] && echo "/etc/redis/redis.conf" || echo "/etc/redis.conf" )
+        cp "$REDIS_CONF" "${REDIS_CONF}.bak.$(date +%s)" 2>/dev/null || true
+        sed -i 's/^# maxmemory .*/maxmemory 256mb/' "$REDIS_CONF" 2>/dev/null || true
+        sed -i 's/^maxmemory .*/maxmemory 256mb/' "$REDIS_CONF" 2>/dev/null || true
+        sed -i 's/^# maxmemory-policy .*/maxmemory-policy allkeys-lru/' "$REDIS_CONF" 2>/dev/null || true
+        sed -i 's/^maxmemory-policy .*/maxmemory-policy allkeys-lru/' "$REDIS_CONF" 2>/dev/null || true
+    fi
+
+    systemctl enable redis
+    systemctl restart redis 2>&1 | tee -a "$LOG_FILE" || warn "Redis failed to start"
+
+    if systemctl is-active --quiet redis; then
+        log "Redis installed and running"
+    else
+        warn "Redis installed but not running"
+    fi
+}
+
 save_credentials() {
     local cred_file="/root/.openpanel-credentials"
     cat > "$cred_file" <<EOF
@@ -697,6 +839,11 @@ main() {
         install_mariadb
         install_composer
         install_nodejs
+        install_dns
+        install_ftp
+        install_firewall
+        install_redis
+        install_wp_cli
         clone_project
         configure_env
         run_migrations

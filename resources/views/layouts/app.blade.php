@@ -90,8 +90,8 @@
                             <a href="{{ route('mysql.status') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mysql.status') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">MySQL Status</a>
                             <a href="{{ route('mysql.processes') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mysql.processes') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Processes</a>
                             <a href="{{ route('mysql.config') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mysql.config') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Config</a>
-                            <a href="{{ route('mysql.postgresql') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mysql.postgresql') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">PostgreSQL</a>
-                            <a href="{{ route('mysql.mongodb') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mysql.mongodb') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">MongoDB</a>
+                            <a href="{{ route('postgresql.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('postgresql.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">PostgreSQL</a>
+                            <a href="{{ route('mongo.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mongo.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">MongoDB</a>
                         </div>
                     </div>
 
@@ -230,15 +230,29 @@
                     </a>
 
                     <!-- Web Server -->
-                    <div x-data="{ open: {{ request()->is('webserver-templates*','webserver-wizard*') ? 'true' : 'false' }} }">
+                    <div x-data="{ open: {{ request()->is('web-stack*','webserver-templates*','webserver-wizard*') ? 'true' : 'false' }} }">
                         <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
                             <i class="fas fa-sitemap w-5 text-center mr-3"></i>
                             <span class="flex-1 text-left">Web Server</span>
                             <i class="fas fa-chevron-down text-xs transition-transform" :class="{ 'rotate-180': open }"></i>
                         </button>
                         <div x-show="open" x-collapse class="ml-5 mt-1 space-y-1">
+                            <a href="{{ route('web-stack.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('web-stack.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Stack Manager</a>
                             <a href="{{ route('webserver-templates.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('webserver-templates.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Vhost Templates</a>
                             <a href="{{ route('webserver-wizard.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('webserver-wizard.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Setup Wizard</a>
+                        </div>
+                    </div>
+
+                    <!-- WordPress Manager -->
+                    <div x-data="{ open: {{ request()->is('wordpress*') ? 'true' : 'false' }} }">
+                        <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+                            <i class="fab fa-wordpress w-5 text-center mr-3"></i>
+                            <span class="flex-1 text-left">WordPress</span>
+                            <i class="fas fa-chevron-down text-xs transition-transform" :class="{ 'rotate-180': open }"></i>
+                        </button>
+                        <div x-show="open" x-collapse class="ml-5 mt-1 space-y-1">
+                            <a href="{{ route('wordpress.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('wordpress.index') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">All Sites</a>
+                            <a href="{{ route('wordpress.create') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('wordpress.create') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Install WordPress</a>
                         </div>
                     </div>
 
@@ -309,11 +323,165 @@
                         <span>Icecast</span>
                     </a>
 
+                    <!-- PostgreSQL -->
+                    <a href="{{ route('postgresql.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('postgresql.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-elephant w-5 text-center mr-3"></i>
+                        <span>PostgreSQL</span>
+                    </a>
+
+                    <!-- MongoDB -->
+                    <a href="{{ route('mongo.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('mongo.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-leaf w-5 text-center mr-3"></i>
+                        <span>MongoDB</span>
+                    </a>
+
+                    <!-- ModSecurity -->
+                    <a href="{{ route('modsecurity.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('modsecurity.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-fire w-5 text-center mr-3"></i>
+                        <span>ModSecurity</span>
+                    </a>
+
+                    <!-- Firewall CSF -->
+                    <a href="{{ route('firewall.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('firewall.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-fire-alt w-5 text-center mr-3"></i>
+                        <span>CSF Firewall</span>
+                    </a>
+
+                    <!-- PHP Selector -->
+                    <a href="{{ route('php-selector.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('php-selector.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fab fa-php w-5 text-center mr-3"></i>
+                        <span>PHP Selector</span>
+                    </a>
+
+                    <!-- PHP-FPM Manager -->
+                    <a href="{{ route('php-fpm.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('php-fpm.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-cogs w-5 text-center mr-3"></i>
+                        <span>PHP-FPM Manager</span>
+                    </a>
+
+                    <!-- PHP.ini Editor -->
+                    <a href="{{ route('phpini.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('phpini.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-file-code w-5 text-center mr-3"></i>
+                        <span>PHP.ini Editor</span>
+                    </a>
+
+                    <!-- DKIM -->
+                    <a href="{{ route('dkim.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('dkim.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-key w-5 text-center mr-3"></i>
+                        <span>DKIM Manager</span>
+                    </a>
+
+                    <!-- SPF -->
+                    <a href="{{ route('spf.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('spf.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-check-double w-5 text-center mr-3"></i>
+                        <span>SPF / DMARC</span>
+                    </a>
+
+                    <!-- MX Routing -->
+                    <a href="{{ route('mx-routing.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('mx-routing.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-route w-5 text-center mr-3"></i>
+                        <span>MX Routing</span>
+                    </a>
+
+                    <!-- Mail Auto-Reply -->
+                    <a href="{{ route('mail-autoreply.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('mail-autoreply.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-reply w-5 text-center mr-3"></i>
+                        <span>Mail Auto-Reply</span>
+                    </a>
+
+                    <!-- Login Security -->
+                    <a href="{{ route('login-security.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('login-security.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-user-shield w-5 text-center mr-3"></i>
+                        <span>Login Security</span>
+                    </a>
+
+                    <!-- CGroups -->
+                    <a href="{{ route('cgroups.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('cgroups.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-microchip w-5 text-center mr-3"></i>
+                        <span>CGroups</span>
+                    </a>
+
+                    <!-- Network Config -->
+                    <a href="{{ route('network.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('network.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-ethernet w-5 text-center mr-3"></i>
+                        <span>Network Config</span>
+                    </a>
+
+                    <!-- Disk Quota -->
+                    <a href="{{ route('disk-quota.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('disk-quota.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-hdd w-5 text-center mr-3"></i>
+                        <span>Disk Quota</span>
+                    </a>
+
+                    <!-- Nameservers -->
+                    <a href="{{ route('nameservers.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('nameservers.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-server w-5 text-center mr-3"></i>
+                        <span>Nameservers</span>
+                    </a>
+
+                    <!-- Process Monitor -->
+                    <a href="{{ route('process-monitor.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('process-monitor.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-tasks w-5 text-center mr-3"></i>
+                        <span>Process Monitor</span>
+                    </a>
+
+                    <!-- DNS Cluster -->
+                    <a href="{{ route('dns-cluster.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('dns-cluster.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-project-diagram w-5 text-center mr-3"></i>
+                        <span>DNS Cluster</span>
+                    </a>
+
+                    <!-- Slave DNS -->
+                    <a href="{{ route('slave-dns.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('slave-dns.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-random w-5 text-center mr-3"></i>
+                        <span>Slave DNS</span>
+                    </a>
+
+                    <!-- Live Monitor -->
+                    <a href="{{ route('live-monitor.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('live-monitor.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-heartbeat w-5 text-center mr-3"></i>
+                        <span>Live Monitor</span>
+                    </a>
+
+                    <!-- Tomcat -->
+                    <a href="{{ route('tomcat-new.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('tomcat-new.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
+                        <i class="fas fa-cat w-5 text-center mr-3"></i>
+                        <span>Tomcat</span>
+                    </a>
+
                     <!-- Help Desk -->
                     <a href="{{ route('helpdesk.index') }}" class="sidebar-link flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors {{ request()->routeIs('helpdesk.*') ? 'active' : 'text-gray-700 hover:bg-gray-100' }}">
                         <i class="fas fa-headset w-5 text-center mr-3"></i>
                         <span>Help Desk</span>
                     </a>
+
+                    <!-- Server Tools -->
+                    <div x-data="{ open: {{ request()->routeIs('config-editor.*|freedns.*|scripts.*|startup-services.*|logrotate.*|fix-permissions.*|security-center.*|sysstat.*|screen.*|php-switch.*|ffmpeg.*|rdns.*|mail-explorer.*|mass-email.*|netdata.*|dns-zone-add.*|restore-backup.*') ? 'true' : 'false' }} }">
+                        <button @click="open = !open" class="flex items-center w-full px-3 py-2.5 text-sm font-medium text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-tools w-5 text-center mr-3"></i>
+                            <span class="flex-1 text-left">Server Tools</span>
+                            <i class="fas fa-chevron-down text-xs transition-transform" :class="{ 'rotate-180': open }"></i>
+                        </button>
+                        <div x-show="open" x-collapse class="ml-5 mt-1 space-y-1">
+                            <a href="{{ route('security-center.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('security-center.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Security Center</a>
+                            <a href="{{ route('config-editor.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('config-editor.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Config Editor</a>
+                            <a href="{{ route('startup-services.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('startup-services.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Startup Services</a>
+                            <a href="{{ route('logrotate.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('logrotate.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Logrotate</a>
+                            <a href="{{ route('fix-permissions.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('fix-permissions.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Fix Permissions</a>
+                            <a href="{{ route('scripts.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('scripts.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Script Installer</a>
+                            <a href="{{ route('freedns.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('freedns.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">FreeDNS</a>
+                            <a href="{{ route('dns-zone-add.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('dns-zone-add.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Add DNS Zone</a>
+                            <a href="{{ route('php-switch.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('php-switch.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">PHP Switcher</a>
+                            <a href="{{ route('sysstat.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('sysstat.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">SysStat / SAR</a>
+                            <a href="{{ route('screen.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('screen.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Screen Manager</a>
+                            <a href="{{ route('ffmpeg.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('ffmpeg.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">FFmpeg</a>
+                            <a href="{{ route('rdns.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('rdns.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">rDNS Checker</a>
+                            <a href="{{ route('mail-explorer.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mail-explorer.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Mail Explorer</a>
+                            <a href="{{ route('mass-email.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('mass-email.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Mass Email</a>
+                            <a href="{{ route('netdata.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('netdata.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Netdata</a>
+                            <a href="{{ route('restore-backup.index') }}" class="sidebar-link flex items-center px-3 py-2 text-sm rounded-lg {{ request()->routeIs('restore-backup.*') ? 'active' : 'text-gray-600 hover:bg-gray-50' }}">Restore Backup</a>
+                        </div>
+                    </div>
 
                     <!-- Backups -->
                     <div x-data="{ open: {{ request()->is('backups*') ? 'true' : 'false' }} }">

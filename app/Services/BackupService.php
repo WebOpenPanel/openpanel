@@ -260,6 +260,40 @@ class BackupService
 
     private static function managerEnsureColumns(\SQLite3 $db): void
     {
+        $db->exec("CREATE TABLE IF NOT EXISTS backups (
+            ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            ACCOUNTS_SERVER TEXT DEFAULT '',
+            ACCOUNTS_SERVER_ID TEXT DEFAULT '',
+            LOCAL_FILE INTEGER DEFAULT 0,
+            FTP_SERVER INTEGER DEFAULT 0,
+            FTP_TYPE TEXT DEFAULT '',
+            FTP_SERVERNAME TEXT DEFAULT '',
+            FTP_LOCATION TEXT DEFAULT '',
+            FTP_LOGIN_USER TEXT DEFAULT '',
+            SSH_SERVER INTEGER DEFAULT 0,
+            SSH_SERVERNAME TEXT DEFAULT '',
+            SSH_FILE TEXT DEFAULT '',
+            SSH_USER TEXT DEFAULT '',
+            SSH_PORT TEXT DEFAULT '22',
+            LOCATION_LOCAL_FILE TEXT DEFAULT '/home/tmp_bak/',
+            CRON_HOUR TEXT DEFAULT '0',
+            CRON_MINUTES TEXT DEFAULT '0',
+            DAILY_BACKUP INTEGER DEFAULT 0,
+            WEEKLY_BACKUP INTEGER DEFAULT 0,
+            MONTHLY_BACKUP INTEGER DEFAULT 0,
+            FREQUENCY_DETAILS_DAILY TEXT DEFAULT '',
+            FREQUENCY_DETAILS_WEEKLY TEXT DEFAULT '',
+            FREQUENCY_DETAILS_MONTHLY TEXT DEFAULT '',
+            BACKUP_RETENTION_DAILY INTEGER DEFAULT 0,
+            BACKUP_RETENTION_WEEKLY INTEGER DEFAULT 0,
+            BACKUP_RETENTION_MONTHLY INTEGER DEFAULT 0,
+            FULL INTEGER DEFAULT 0,
+            INCREMENTAL INTEGER DEFAULT 0,
+            DEFAULUSERBACKUP INTEGER DEFAULT 0,
+            LASTEXEC TEXT DEFAULT 'Never',
+            NOT_START INTEGER DEFAULT 0,
+            BACKUP_STATUS INTEGER DEFAULT 1
+        )");
         $requiredColumns = [
             'SSH_PASSWORD' => 'TEXT',
             'CONNECTION_TYPE' => 'TEXT',
@@ -286,8 +320,10 @@ class BackupService
         if (!$db) return [];
         $results = $db->query("SELECT * FROM backups WHERE ACCOUNTS_SERVER <> 'ONLYRESTORE'");
         $backups = [];
-        while ($row = $results->fetchArray(\SQLITE3_ASSOC)) {
-            $backups[] = self::managerFormatBackupRow($row);
+        if ($results) {
+            while ($row = $results->fetchArray(\SQLITE3_ASSOC)) {
+                $backups[] = self::managerFormatBackupRow($row);
+            }
         }
         $db->close();
         return $backups;

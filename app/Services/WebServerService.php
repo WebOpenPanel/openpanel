@@ -736,7 +736,7 @@ class WebServerService
 
     public static function webServersSettings(): array
     {
-        $row = DB::connection('openpanel')->table('settings')->select('homedir', 'apache_port', 'shared_ip')->first();
+        $row = DB::connection('sqlite')->table('settings')->select('homedir', 'apache_port', 'shared_ip')->first();
         if (!$row) return ['homedir' => '/home', 'apache_port' => '80', 'shared_ip' => '127.0.0.1'];
 
         $result = (array) $row;
@@ -1305,10 +1305,10 @@ class WebServerService
     public static function dameUser(string $domain): ?string
     {
         try {
-            $user = \Illuminate\Support\Facades\DB::connection('openpanel')->table('user')->where('domain', $domain)->first();
+            $user = \Illuminate\Support\Facades\DB::connection('sqlite')->table('user')->where('domain', $domain)->first();
             if ($user) return $user->username;
 
-            $addon = \Illuminate\Support\Facades\DB::connection('openpanel')->table('domains')->where('domain', $domain)->first();
+            $addon = \Illuminate\Support\Facades\DB::connection('sqlite')->table('domains')->where('domain', $domain)->first();
             if ($addon) return $addon->user;
         } catch (\Exception $e) {}
         return null;

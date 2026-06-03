@@ -2,134 +2,153 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\UserAccount;
-use App\Models\User;
 use App\Models\Package;
+use App\Services\AccountService;
 use Illuminate\Http\Request;
 
 class UserAccountController extends Controller
 {
+    protected AccountService $accounts;
+
+    public function __construct(AccountService $accounts)
+    {
+        $this->accounts = $accounts;
+    }
+
     public function index(Request $request)
     {
-        $query = UserAccount::with(['user', 'package']);
+        $users = $this->accounts->listUsers();
+        $accounts = [];
+
+        foreach ($users as $username) {
+            if ($username === 'root') continue;
+            $info = $this->accounts->getUser($username);
+            if ($info) {
+                $accounts[] = $info;
+            }
+        }
 
         if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('domain', 'like', "%{$search}%")
-                    ->orWhere('ip_address', 'like', "%{$search}%")
-                    ->orWhereHas('user', function ($q2) use ($search) {
-                        $q2->where('username', 'like', "%{$search}%");
-                    });
-            });
+            $search = strtolower($request->search);
+            $accounts = array_filter($accounts, fn($a) =>
+                str_contains($a['username'] ?? '', $search) ||
+                str_contains($a['domain'] ?? '', $search)
+            );
         }
 
-        if ($request->filled('status')) {
-            $query->where('suspended', $request->status === 'suspended' ? 'yes' : 'no');
-        }
+        $page = $request->input('page', 1);
+        $perPage = 20;
+        $total = count($accounts);
+        $paged = array_slice($accounts, ($page - 1) * $perPage, $perPage);
+        $accounts = new \Illuminate\Pagination\LengthAwarePaginator($paged, $total, $perPage, $page, [
+            'path' => $request->url(),
+            'query' => $request->query(),
+        ]);
 
-        $accounts = $query->latest()->paginate(20);
-        $packages = Package::orderBy('name')->get();
-
-        return view('accounts.index', compact('accounts', 'packages'));
+        return view('accounts.index', compact('accounts'));
     }
 
     public function create()
     {
-        $packages = Package::orderBy('name')->get();
+        $packages = Package::all();
         return view('accounts.create', compact('packages'));
     }
 
     public function store(Request $request)
     {
         $request->validate([
-            'username' => 'required|string|max:50|unique:users,username',
-            'email' => 'required|email|unique:users,email',
+            'username' => 'required|string|max:32',
             'password' => 'required|string|min:8|confirmed',
-            'domain' => 'required|string|max:255|unique:user_accounts,domain',
-            'ip_address' => 'required|ip',
-            'package_id' => 'required|exists:packages,id',
+            'domain' => 'required|string|max:255',
+            'ip_address' => 'nullable|ip',
+            'email' => 'nullable|email',
+            'package' => 'nullable|string',
+            'disk_limit' => 'nullable|integer|min:100',
+            'bandwidth_limit' => 'nullable|integer|min:100',
         ]);
 
-        $user = User::create([
-            'username' => $request->username,
-            'email' => $request->email,
-            'password' => $request->password,
-            'role' => 'user',
-            'ip_address' => $request->ip_address,
-        ]);
-
-        $package = Package::find($request->package_id);
-
-        $account = UserAccount::create([
-            'user_id' => $user->id,
-            'package_id' => $package->id,
-            'domain' => $request->domain,
-            'ip_address' => $request->ip_address,
-            'document_root' => "/home/{$request->username}/public_html",
-            'shell_access' => $package->shell_access,
-            'disk_quota_bytes' => $package->disk_space_mb * 1024 * 1024,
-            'bandwidth_limit_bytes' => $package->bandwidth_mb * 1024 * 1024,
-        ]);
-
-        return redirect()->route('accounts.index')
-            ->with('success', "Account '{$request->domain}' created successfully.");
+        try {
+            $result = $this->accounts->create($request->all());
+            return redirect()->route('accounts.index')
+                ->with('success', $result['message']);
+        } catch (\RuntimeException $e) {
+            return back()->withInput()->with('error', $e->getMessage());
+        }
     }
 
-    public function show(UserAccount $account)
+    public function show(string $username)
     {
-        $account->load(['user', 'package', 'domains', 'dnsZones', 'mysqlDatabases', 'emailAccounts', 'ftpAccounts', 'sslCertificates', 'backups']);
-        return view('accounts.show', compact('account'));
+        $account = $this->accounts->getUser($username);
+        if (!$account) {
+            abort(404, 'Account not found.');
+        }
+
+        $home = "/home/{$username}";
+        $diskUsed = 0;
+        $result = app(\Illuminate\Process\Factory::class)->run("du -sm {$home} 2>/dev/null | awk '{print $1}'");
+        if ($result->successful()) {
+            $diskUsed = (int) trim($result->output());
+        }
+
+        return view('accounts.show', compact('account', 'username', 'home', 'diskUsed'));
     }
 
-    public function edit(UserAccount $account)
+    public function edit(string $username)
     {
-        $packages = Package::orderBy('name')->get();
-        return view('accounts.edit', compact('account', 'packages'));
+        $account = $this->accounts->getUser($username);
+        if (!$account) {
+            abort(404, 'Account not found.');
+        }
+        $packages = Package::all();
+        return view('accounts.edit', compact('account', 'username', 'packages'));
     }
 
-    public function update(Request $request, UserAccount $account)
+    public function update(Request $request, string $username)
     {
-        $request->validate([
-            'package_id' => 'required|exists:packages,id',
-            'ip_address' => 'required|ip',
-        ]);
+        $account = $this->accounts->getUser($username);
+        if (!$account) {
+            abort(404, 'Account not found.');
+        }
 
-        $account->update([
-            'package_id' => $request->package_id,
-            'ip_address' => $request->ip_address,
-        ]);
+        if ($request->filled('new_password')) {
+            $request->validate([
+                'new_password' => 'required|string|min:8|confirmed',
+            ]);
+            $this->accounts->changePassword($username, $request->new_password);
+            return back()->with('success', 'Password changed.');
+        }
 
-        return redirect()->route('accounts.show', $account)
-            ->with('success', 'Account updated successfully.');
+        return back()->with('info', 'No changes submitted.');
     }
 
-    public function destroy(UserAccount $account)
+    public function destroy(string $username)
     {
-        $account->user()->delete();
-        $account->delete();
-
-        return redirect()->route('accounts.index')
-            ->with('success', 'Account deleted successfully.');
+        try {
+            $result = $this->accounts->delete($username);
+            return redirect()->route('accounts.index')
+                ->with('success', $result['message']);
+        } catch (\RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
     }
 
-    public function suspend(UserAccount $account)
+    public function suspend(string $username)
     {
-        $account->update([
-            'suspended' => 'yes',
-            'suspend_reason' => request('reason', 'Suspended by admin'),
-        ]);
-
-        return back()->with('success', "Account '{$account->domain}' has been suspended.");
+        try {
+            $result = $this->accounts->suspend($username);
+            return back()->with('success', $result['message']);
+        } catch (\RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
     }
 
-    public function unsuspend(UserAccount $account)
+    public function unsuspend(string $username)
     {
-        $account->update([
-            'suspended' => 'no',
-            'suspend_reason' => null,
-        ]);
-
-        return back()->with('success', "Account '{$account->domain}' has been unsuspended.");
+        try {
+            $result = $this->accounts->unsuspend($username);
+            return back()->with('success', $result['message']);
+        } catch (\RuntimeException $e) {
+            return back()->with('error', $e->getMessage());
+        }
     }
 }

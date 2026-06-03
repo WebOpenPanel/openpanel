@@ -1,105 +1,94 @@
 @extends('layouts.app')
-@section('title', $account->domain)
+@section('title', $account['domain'] ?? 'Account')
 
 @section('content')
+@php $a = (object) $account; $suspended = ($a->status ?? 'active') === 'suspended'; @endphp
 <div class="space-y-6">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div class="flex items-center gap-3">
             <a href="{{ route('accounts.index') }}" class="text-gray-400 hover:text-gray-600"><i class="fas fa-arrow-left"></i></a>
-            <h2 class="text-lg font-bold text-gray-900">{{ $account->domain }}</h2>
-            @if($account->isSuspended())
+            <h2 class="text-lg font-bold text-gray-900">{{ $a->domain }}</h2>
+            @if($suspended)
                 <span class="px-2 py-0.5 text-xs font-medium bg-red-100 text-red-800 rounded-full">Suspended</span>
             @else
                 <span class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 rounded-full">Active</span>
             @endif
         </div>
         <div class="flex items-center gap-2">
-            <a href="{{ route('accounts.edit', $account) }}" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200"><i class="fas fa-edit mr-1"></i> Edit</a>
-            @if($account->isSuspended())
-                <form method="POST" action="{{ route('accounts.unsuspend', $account) }}" class="inline">@csrf
+            <a href="{{ route('accounts.edit', $a->username) }}" class="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200"><i class="fas fa-edit mr-1"></i> Edit</a>
+            @if($suspended)
+                <form method="POST" action="{{ route('accounts.unsuspend', $a->username) }}" class="inline">@csrf
                     <button class="px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700"><i class="fas fa-play mr-1"></i> Unsuspend</button>
                 </form>
             @else
-                <form method="POST" action="{{ route('accounts.suspend', $account) }}" class="inline">@csrf
+                <form method="POST" action="{{ route('accounts.suspend', $a->username) }}" class="inline">@csrf
                     <button class="px-3 py-2 bg-yellow-500 text-white rounded-lg text-sm hover:bg-yellow-600"><i class="fas fa-pause mr-1"></i> Suspend</button>
                 </form>
             @endif
         </div>
     </div>
 
-    <!-- Account Info Cards -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="bg-white rounded-xl border border-gray-200 p-4">
             <p class="text-xs text-gray-500 uppercase">Username</p>
-            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $account->user->username ?? '-' }}</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $a->username }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 p-4">
             <p class="text-xs text-gray-500 uppercase">IP Address</p>
-            <p class="mt-1 text-sm font-semibold font-mono text-gray-900">{{ $account->ip_address }}</p>
+            <p class="mt-1 text-sm font-semibold font-mono text-gray-900">{{ $a->ip_address }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 p-4">
             <p class="text-xs text-gray-500 uppercase">Package</p>
-            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $account->package->name ?? '-' }}</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $a->package ?? '-' }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 p-4">
-            <p class="text-xs text-gray-500 uppercase">Disk Usage</p>
-            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $account->disk_usage_formatted }} / {{ $account->disk_quota_formatted }}</p>
-            <div class="mt-2 w-full bg-gray-200 rounded-full h-1.5">
-                <div class="bg-indigo-500 h-1.5 rounded-full" @style(['width:'.$account->disk_usage_percent.'%'])></div>
-            </div>
+            <p class="text-xs text-gray-500 uppercase">Disk Limit</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $a->disk_limit ?? 0 }} MB</p>
         </div>
     </div>
 
-    <!-- Resource Counts -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-indigo-600">{{ $account->domains->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">Domains</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+            <p class="text-xs text-gray-500 uppercase">Email</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $a->email ?? '-' }}</p>
         </div>
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-blue-600">{{ $account->dnsZones->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">DNS Zones</p>
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+            <p class="text-xs text-gray-500 uppercase">Home Directory</p>
+            <p class="mt-1 text-sm font-mono text-gray-900">{{ $home ?? '/home/' . $a->username }}</p>
         </div>
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-orange-600">{{ $account->mysqlDatabases->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">Databases</p>
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+            <p class="text-xs text-gray-500 uppercase">Disk Used</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $diskUsed ?? 0 }} MB</p>
         </div>
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-green-600">{{ $account->emailAccounts->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">Emails</p>
-        </div>
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-purple-600">{{ $account->ftpAccounts->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">FTP</p>
-        </div>
-        <div class="bg-white rounded-xl border border-gray-200 p-3 text-center">
-            <p class="text-2xl font-bold text-cyan-600">{{ $account->sslCertificates->count() }}</p>
-            <p class="text-xs text-gray-500 mt-1">SSL</p>
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+            <p class="text-xs text-gray-500 uppercase">Bandwidth Limit</p>
+            <p class="mt-1 text-sm font-semibold text-gray-900">{{ $a->bandwidth_limit ?? 0 }} MB</p>
         </div>
     </div>
 
-    <!-- Domains -->
     <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div class="px-5 py-3 bg-gray-50 border-b border-gray-200">
-            <h3 class="text-sm font-semibold text-gray-700">Domains</h3>
+            <h3 class="text-sm font-semibold text-gray-700">Account Details</h3>
         </div>
-        <table class="w-full">
-            <thead class="bg-gray-50"><tr>
-                <th class="px-5 py-2 text-left text-xs font-medium text-gray-500 uppercase">Domain</th>
-                <th class="px-5 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                <th class="px-5 py-2 text-left text-xs font-medium text-gray-500 uppercase">SSL</th>
-            </tr></thead>
-            <tbody class="divide-y divide-gray-100">
-                @forelse($account->domains as $domain)
-                <tr><td class="px-5 py-2.5 text-sm text-gray-800">{{ $domain->domain }}</td>
-                    <td class="px-5 py-2.5"><span class="px-2 py-0.5 text-xs bg-gray-100 rounded-full">{{ $domain->type }}</span></td>
-                    <td class="px-5 py-2.5">@if($domain->ssl_enabled)<i class="fas fa-lock text-green-500"></i>@else<i class="fas fa-unlock text-gray-300"></i>@endif</td>
-                </tr>
-                @empty
-                <tr><td colspan="3" class="px-5 py-4 text-center text-sm text-gray-400">No domains</td></tr>
-                @endforelse
-            </tbody>
-        </table>
+        <div class="p-5 space-y-3 text-sm">
+            <div class="flex justify-between"><span class="text-gray-500">Domain</span><span class="font-medium">{{ $a->domain }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Username</span><span class="font-medium font-mono">{{ $a->username }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">IP Address</span><span class="font-medium font-mono">{{ $a->ip_address }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Status</span><span class="font-medium">{{ ucfirst($a->status ?? 'active') }}</span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Created</span><span class="font-medium">{{ $a->created_at ?? '-' }}</span></div>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div class="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-gray-700">Quick Actions</h3>
+        </div>
+        <div class="p-5 flex flex-wrap gap-3">
+            <a href="{{ route('accounts.edit', $a->username) }}" class="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200"><i class="fas fa-key mr-1"></i> Change Password</a>
+            <form method="POST" action="{{ route('accounts.destroy', $a->username) }}" onsubmit="return confirm('Delete account {{ $a->username }}? This is irreversible!')" class="inline">@csrf @method('DELETE')
+                <button class="px-4 py-2 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200"><i class="fas fa-trash mr-1"></i> Delete Account</button>
+            </form>
+        </div>
     </div>
 </div>
 @endsection

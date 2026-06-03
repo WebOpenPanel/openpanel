@@ -25,33 +25,34 @@ class MonitController extends Controller
     public function editConfig(Request $request)
     {
         $request->validate(['file' => 'required|string']);
-        $content = MonitService::getServiceConfig($request->file);
-        return view('monit.edit', ['file' => $request->file, 'content' => $content]);
+        $file = $request->input('file');
+        $content = MonitService::getServiceConfig($file);
+        return view('monit.edit', compact('file', 'content'));
     }
 
     public function saveConfig(Request $request)
     {
         $request->validate(['file' => 'required|string', 'content' => 'required|string']);
-        MonitService::saveServiceConfig($request->file, $request->content);
+        MonitService::saveServiceConfig($request->input('file'), $request->input('content'));
         return back()->with('success', 'Config saved.');
     }
 
     public function deleteConfig(Request $request)
     {
         $request->validate(['file' => 'required|string']);
-        MonitService::deleteServiceConfig($request->file);
+        MonitService::deleteServiceConfig($request->input('file'));
         return back()->with('success', 'Config deleted.');
     }
 
     public function monitor(Request $request)
     {
         $request->validate(['service' => 'required|string']);
-        return back()->with('output', MonitService::monitorService($request->service));
+        return back()->with('output', MonitService::monitorService($request->input('service')));
     }
 
     public function unmonitor(Request $request)
     {
         $request->validate(['service' => 'required|string']);
-        return back()->with('output', MonitService::unmonitorService($request->service));
+        return back()->with('output', MonitService::unmonitorService($request->input('service')));
     }
 }
