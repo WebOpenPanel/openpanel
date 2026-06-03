@@ -623,6 +623,14 @@ server {
 
     client_max_body_size 64M;
 
+    # Symlink protection: only follow symlinks owned by the target user
+    disable_symlinks if_not_owner from={$home}/public_html;
+
+    # Security headers
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
@@ -634,7 +642,14 @@ server {
         fastcgi_read_timeout 300;
     }
 
+    # Block access to hidden files (except .well-known)
     location ~ /\.(?!well-known).* { deny all; }
+
+    # Block access to sensitive files
+    location ~* \.(env|bak|sql|log|conf|ini|sh|py)\$ { deny all; }
+
+    # Block access to sensitive paths
+    location ~ ^/(private|backups|logs|\.openpanel)/ { deny all; }
 
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
         expires 30d;
@@ -655,15 +670,36 @@ NGINX;
     ServerAlias www.{$domain}
     DocumentRoot {$home}/public_html
 
+    # Symlink protection: only follow symlinks owned by the same user
     <Directory {$home}/public_html>
         AllowOverride All
         Require all granted
-        Options -Indexes +FollowSymLinks
+        Options -Indexes +SymLinksIfOwnerMatch
     </Directory>
+
+    # Block access to sensitive directories
+    <DirectoryMatch "^{$home}/(private|backups|logs|\.openpanel)">
+        Require all denied
+    </DirectoryMatch>
+
+    # Block access to hidden files
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+
+    # Block access to sensitive file types
+    <FilesMatch "\.(env|bak|sql|log|conf|ini|sh|py)$">
+        Require all denied
+    </FilesMatch>
 
     <FilesMatch \.php$>
         SetHandler "proxy:unix:/run/openpanel-php-user-{$username}.sock|fcgi://localhost"
     </FilesMatch>
+
+    # Security headers
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
 
     ErrorLog {$home}/logs/apache/error.log
     CustomLog {$home}/logs/apache/access.log combined
@@ -687,6 +723,11 @@ server {
 
     client_max_body_size 64M;
 
+    # Security headers
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
     location / {
         proxy_pass http://127.0.0.1:{$backendPort};
         proxy_set_header Host \$host;
@@ -699,7 +740,14 @@ server {
         proxy_pass_header X-Varnish;
     }
 
+    # Block access to hidden files
     location ~ /\.(?!well-known).* { deny all; }
+
+    # Block access to sensitive files
+    location ~* \.(env|bak|sql|log|conf|ini|sh|py)\$ { deny all; }
+
+    # Block access to sensitive paths
+    location ~ ^/(private|backups|logs|\.openpanel)/ { deny all; }
 }
 NGINX;
 

@@ -1048,6 +1048,56 @@ EOF
     log "Credentials saved to $cred_file"
 }
 
+harden_security() {
+    step "Applying security hardening"
+
+    # 1. Restrict /proc visibility (hide other users' processes)
+    if ! grep -q 'hidepid=2' /etc/fstab; then
+        # Get current /proc mount options
+        local proc_opts=$(findmnt -n -o OPTIONS /proc 2>/dev/null || echo "defaults")
+        if ! echo "$proc_opts" | grep -q 'hidepid'; then
+            echo "proc    /proc    proc    defaults,hidepid=2,gid=proc    0 0" >> /etc/fstab
+            mount -o remount,hidepid=2 /proc 2>/dev/null || true
+            log "Applied hidepid=2 on /proc"
+        fi
+    fi
+
+    # 2. Set ptrace_scope to 1 (prevent cross-process debugging)
+    echo "kernel.yama.ptrace_scope = 1" > /etc/sysctl.d/99-openpanel-security.conf
+    sysctl -p /etc/sysctl.d/99-openpanel-security.conf 2>/dev/null || true
+    log "Set ptrace_scope = 1"
+
+    # 3. Disable core dumps
+    echo "* hard core 0" >> /etc/security/limits.d/99-openpanel.conf 2>/dev/null
+    echo "fs.suid_dumpable = 0" >> /etc/sysctl.d/99-openpanel-security.conf
+    sysctl -p /etc/sysctl.d/99-openpanel-security.conf 2>/dev/null || true
+    log "Disabled core dumps"
+
+    # 4. Set restrictive umask for new users
+    echo "UMASK 077" >> /etc/login.defs 2>/dev/null
+    log "Set default UMASK 077"
+
+    # 5. Create proc group for hidepid
+    if ! getent group proc > /dev/null 2>&1; then
+        groupadd proc 2>/dev/null || true
+        # Add nginx and apache to proc group so they can read /proc
+        usermod -aG proc nginx 2>/dev/null || true
+        usermod -aG proc apache 2>/dev/null || true
+        log "Created proc group for hidepid"
+    fi
+
+    # 6. Restrict cron access
+    echo "root" > /etc/cron.allow
+    chmod 600 /etc/cron.allow
+    log "Restricted cron access to root (hosting users use panel cron)"
+
+    # 7. Set /tmp with nosuid,nodev
+    mount -o remount,nosuid,nodev /tmp 2>/dev/null || true
+    log "Hardened /tmp mount options"
+
+    log "Security hardening complete"
+}
+
 print_summary() {
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -1124,6 +1174,7 @@ main() {
         setup_cron
         optimize_app
         install_mail
+        harden_security
         save_credentials
     } 2>&1 | tee -a "$LOG_FILE"
 

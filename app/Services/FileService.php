@@ -7,6 +7,92 @@ class FileService
     const LOGROTATE_DIR = '/etc/logrotate.d/';
     const LOG_DIR = '/var/log/';
 
+    /**
+     * Validate and resolve a file path against an allowed root directory.
+     * Prevents directory traversal, symlink escape, and access outside allowed root.
+     *
+     * @return string|false Resolved absolute path, or false if invalid
+     */
+    public static function validatePath(string $path, string $allowedRoot): string|false
+    {
+        // Normalize: remove null bytes, resolve .. sequences
+        $path = str_replace("\0", '', $path);
+
+        // If path is relative, resolve against allowed root
+        if (!str_starts_with($path, '/')) {
+            $path = rtrim($allowedRoot, '/') . '/' . $path;
+        }
+
+        // Resolve the real path (follows symlinks, resolves ..)
+        $realPath = realpath($path);
+
+        // If realpath fails, the file/dir doesn't exist yet — validate parent
+        if ($realPath === false) {
+            $parent = dirname($path);
+            $realParent = realpath($parent);
+            if ($realParent === false) {
+                return false; // Parent doesn't exist
+            }
+            $realPath = $realParent . '/' . basename($path);
+        }
+
+        // Ensure resolved path is inside allowed root
+        $realRoot = realpath($allowedRoot);
+        if ($realRoot === false) {
+            return false;
+        }
+
+        if (!str_starts_with($realPath, $realRoot . '/') && $realPath !== $realRoot) {
+            return false; // Path escapes allowed root
+        }
+
+        // If it's a symlink, verify the target is also inside allowed root
+        if (is_link($path)) {
+            $linkTarget = readlink($path);
+            if (!str_starts_with($linkTarget, '/')) {
+                $linkTarget = dirname($path) . '/' . $linkTarget;
+            }
+            $realTarget = realpath($linkTarget);
+            if ($realTarget === false || (!str_starts_with($realTarget, $realRoot . '/') && $realTarget !== $realRoot)) {
+                return false; // Symlink target escapes allowed root
+            }
+        }
+
+        return $realPath;
+    }
+
+    /**
+     * Check if a path is safe for a specific user (inside their home directory).
+     */
+    public static function validateUserPath(string $path, string $username): string|false
+    {
+        $homeDir = "/home/{$username}";
+        return self::validatePath($path, $homeDir);
+    }
+
+    /**
+     * Sanitize a filename to prevent path injection.
+     */
+    public static function sanitizeFilename(string $filename): string
+    {
+        // Remove path separators and null bytes
+        $filename = basename($filename);
+        $filename = str_replace(["\0", '..', '~'], '', $filename);
+
+        // Remove dangerous characters
+        $filename = preg_replace('/[^\w\-\.]/', '_', $filename);
+
+        // Prevent hidden files
+        $filename = ltrim($filename, '.');
+
+        // Limit length
+        if (strlen($filename) > 255) {
+            $filename = substr($filename, 0, 255);
+        }
+
+        return $filename ?: 'unnamed';
+    }
+
     public static function listDirectory(string $path): array
     {
         $path = rtrim($path, '/');

@@ -7,6 +7,7 @@ Route::prefix('v1')->middleware(\App\Http\Middleware\ApiAuthMiddleware::class)->
     $c = \App\Http\Controllers\Api\V1Controller::class;
 
     Route::get('/health', [$c, 'health']);
+    Route::get('/abuse-monitor', [$c, 'abuseMonitor']);
     Route::get('/server-info', [$c, 'serverInfo']);
     Route::get('/packages', [$c, 'packages']);
 
@@ -17,6 +18,7 @@ Route::prefix('v1')->middleware(\App\Http\Middleware\ApiAuthMiddleware::class)->
     Route::post('/accounts/{username}/terminate', [$c, 'accountTerminate']);
     Route::post('/accounts/{username}/change-password', [$c, 'accountChangePassword']);
     Route::post('/accounts/{username}/change-package', [$c, 'accountChangePackage']);
+    Route::post('/accounts/{username}/repair-isolation', [$c, 'accountRepairIsolation']);
     Route::get('/accounts/{username}', [$c, 'accountGet']);
     Route::get('/accounts/{username}/usage', [$c, 'accountUsage']);
 

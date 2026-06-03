@@ -139,6 +139,56 @@ class BackupService
         return $backup;
     }
 
+    /**
+     * Validate archive contents before extraction.
+     * Blocks: absolute paths, ../ traversal, symlinks, devices, absolute link targets.
+     */
+    protected static function validateArchive(string $path): array
+    {
+        $ext = pathinfo($path, PATHINFO_EXTENSION);
+        $listCmd = ($ext === 'gz') ? "tar -tzf " . escapeshellarg($path) : "tar -tf " . escapeshellarg($path);
+        $output = ShellService::exec($listCmd . " 2>&1");
+        $entries = array_filter(explode("\n", trim($output)));
+
+        $blocked = [];
+        foreach ($entries as $entry) {
+            $entry = trim($entry);
+            if (empty($entry)) continue;
+
+            // Block absolute paths
+            if (str_starts_with($entry, '/')) {
+                $blocked[] = "Absolute path: {$entry}";
+                continue;
+            }
+
+            // Block ../ traversal
+            if (str_contains($entry, '../') || str_contains($entry, '..\\')) {
+                $blocked[] = "Path traversal: {$entry}";
+                continue;
+            }
+
+            // Block entries that look like symlinks in tar listing (ending with ->)
+            if (preg_match('/\s+->\s+/', $entry)) {
+                $parts = preg_split('/\s+->\s+/', $entry, 2);
+                $target = $parts[1] ?? '';
+                if (str_starts_with($target, '/') || str_contains($target, '../')) {
+                    $blocked[] = "Dangerous symlink: {$entry}";
+                }
+            }
+
+            // Block device files
+            if (preg_match('/^[bc]\s/', $entry)) {
+                $blocked[] = "Device file: {$entry}";
+            }
+        }
+
+        return [
+            'valid' => empty($blocked),
+            'entries' => count($entries),
+            'blocked' => $blocked,
+        ];
+    }
+
     public static function restoreBackup(Backup $backup): array
     {
         $path = $backup->path;
@@ -146,14 +196,26 @@ class BackupService
             return ['success' => false, 'message' => 'Backup file not found'];
         }
 
-        $ext = pathinfo($path, PATHINFO_EXTENSION);
-        if ($ext === 'gz') {
-            $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / 2>&1");
-        } else {
-            $output = ShellService::exec("tar -xf " . escapeshellarg($path) . " -C / 2>&1");
+        // Validate archive before extraction
+        $validation = self::validateArchive($path);
+        if (!$validation['valid']) {
+            return [
+                'success' => false,
+                'message' => 'Archive failed security validation',
+                'blocked' => $validation['blocked'],
+            ];
         }
 
-        return ['success' => true, 'output' => $output];
+        // Extract with --no-same-owner to prevent ownership attacks, --one-file-system to prevent escape
+        $ext = pathinfo($path, PATHINFO_EXTENSION);
+        $flags = '--no-same-owner --one-file-system';
+        if ($ext === 'gz') {
+            $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
+        } else {
+            $output = ShellService::exec("tar -xf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
+        }
+
+        return ['success' => true, 'output' => $output, 'validation' => $validation];
     }
 
     public static function restoreAccountBackup(Backup $backup, string $username): array
@@ -163,15 +225,29 @@ class BackupService
             return ['success' => false, 'message' => 'Backup file not found'];
         }
 
-        $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / 2>&1");
-
-        if (file_exists("/tmp/{$username}_databases.sql")) {
-            $password = self::getMysqlRootPassword();
-            ShellService::exec("mysql -u root -p'{$password}' < /tmp/{$username}_databases.sql 2>&1");
-            @unlink("/tmp/{$username}_databases.sql");
+        // Validate archive before extraction
+        $validation = self::validateArchive($path);
+        if (!$validation['valid']) {
+            return [
+                'success' => false,
+                'message' => 'Archive failed security validation',
+                'blocked' => $validation['blocked'],
+            ];
         }
 
-        return ['success' => true, 'output' => $output];
+        // Extract to user's home directory (not root), with safety flags
+        $home = "/home/{$username}";
+        $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / --no-same-owner --one-file-system 2>&1");
+
+        // Restore database if present
+        $dbDump = "/tmp/{$username}_databases.sql";
+        if (file_exists($dbDump)) {
+            $password = self::getMysqlRootPassword();
+            ShellService::exec("mysql -u root -p'{$password}' < " . escapeshellarg($dbDump) . " 2>&1");
+            @unlink($dbDump);
+        }
+
+        return ['success' => true, 'output' => $output, 'validation' => $validation];
     }
 
     public static function deleteBackup(Backup $backup): bool

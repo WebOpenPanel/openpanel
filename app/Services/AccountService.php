@@ -181,6 +181,125 @@ class AccountService
         return trim($result->output()) ?: '127.0.0.1';
     }
 
+    /**
+     * Repair filesystem isolation for a user account.
+     * Fixes ownership, permissions, missing dirs, and dangerous configurations.
+     */
+    public function repairUserIsolation(string $username): array
+    {
+        $user = $this->getUser($username);
+        if (!$user) {
+            throw new \RuntimeException("User '{$username}' not found.");
+        }
+
+        $home = "{$this->homeBase}/{$username}";
+        $result = ['username' => $username, 'actions' => [], 'success' => true];
+
+        if (!is_dir($home)) {
+            $result['success'] = false;
+            $result['actions'][] = 'home_dir_missing';
+            return $result;
+        }
+
+        // 1. Fix home directory ownership
+        Process::run("chown {$username}:{$username} {$home}");
+        $result['actions'][] = 'home_ownership_fixed';
+
+        // 2. Fix home directory permissions (711 = traverse only)
+        Process::run("chmod 711 {$home}");
+        $result['actions'][] = 'home_perms_711';
+
+        // 3. Ensure required directories exist
+        $requiredDirs = [
+            'public_html', 'public_html/cgi-bin', 'public_html/uploads',
+            '.ssh', 'logs', 'logs/nginx', 'logs/apache',
+            'tmp', 'mail', 'backups', 'private', '.openpanel',
+        ];
+        foreach ($requiredDirs as $dir) {
+            $fullPath = "{$home}/{$dir}";
+            if (!is_dir($fullPath)) {
+                Process::run("sudo -u {$username} mkdir -p " . escapeshellarg($fullPath));
+                $result['actions'][] = "created_{$dir}";
+            }
+        }
+
+        // 4. Fix directory permissions
+        $perms = [
+            'public_html' => '750',
+            '.ssh' => '700',
+            'logs' => '700',
+            'tmp' => '700',
+            'backups' => '700',
+            'private' => '700',
+            '.openpanel' => '700',
+        ];
+        foreach ($perms as $dir => $perm) {
+            $fullPath = "{$home}/{$dir}";
+            if (is_dir($fullPath)) {
+                Process::run("chmod {$perm} " . escapeshellarg($fullPath));
+            }
+        }
+        $result['actions'][] = 'directory_perms_fixed';
+
+        // 5. Fix ownership of all user files
+        Process::run("chown -R {$username}:{$username} {$home}");
+        $result['actions'][] = 'ownership_recursion_fixed';
+
+        // 6. Remove world-writable files in home (security risk)
+        Process::run("find {$home} -type f -perm -0002 -exec chmod o-w {} + 2>/dev/null");
+        Process::run("find {$home} -type d -perm -0002 -not -path '*/tmp' -exec chmod o-w {} + 2>/dev/null");
+        $result['actions'][] = 'world_writable_removed';
+
+        // 7. Remove symlinks pointing outside home (symlink attack defense)
+        $symlinkResult = Process::run("find {$home} -type l ! -exec test -e {} \\; -delete 2>/dev/null");
+        Process::run("find {$home} -type l -exec readlink -f {} \\; 2>/dev/null | while read target; do
+            case \"\$target\" in
+                {$home}*) ;; # OK — points inside home
+                *) find {$home} -type l -lname \"*\$(basename \$target)*\" -delete 2>/dev/null ;;
+            esac
+done");
+        $result['actions'][] = 'dangerous_symlinks_removed';
+
+        // 8. Fix PHP-FPM pool if missing or misconfigured
+        $poolPath = "{$this->phpFpmPoolDir}/{$username}.conf";
+        if (!file_exists($poolPath)) {
+            $this->createPhpFpmPool($username);
+            $result['actions'][] = 'php_fpm_pool_created';
+        } else {
+            // Validate pool has security directives
+            $poolContent = file_get_contents($poolPath);
+            $needsUpdate = false;
+            if (strpos($poolContent, 'disable_functions') === false) {
+                $needsUpdate = true;
+            }
+            if (strpos($poolContent, 'open_basedir') === false) {
+                $needsUpdate = true;
+            }
+            if ($needsUpdate) {
+                $this->createPhpFpmPool($username);
+                $result['actions'][] = 'php_fpm_pool_hardened';
+            }
+        }
+
+        // 9. Reload PHP-FPM if pool was modified
+        if (in_array('php_fpm_pool_created', $result['actions']) ||
+            in_array('php_fpm_pool_hardened', $result['actions'])) {
+            Process::run("systemctl reload php-fpm 2>/dev/null");
+            $result['actions'][] = 'php_fpm_reloaded';
+        }
+
+        // 10. Fix .htaccess if missing
+        $htaccessPath = "{$home}/public_html/.htaccess";
+        if (!file_exists($htaccessPath)) {
+            $domain = $user['domain'] ?? $username;
+            // Re-create home structure elements
+            $this->createHomeStructure($username, $domain);
+            $result['actions'][] = 'htaccess_restored';
+        }
+
+        return $result;
+    }
+
     protected function validateInput(array $data): void
     {
         if (empty($data['username'])) {
@@ -210,13 +329,15 @@ class AccountService
     {
         $home = "{$this->homeBase}/{$username}";
 
-        $result = Process::run("sudo /usr/sbin/useradd -m -d {$home} -s /bin/bash {$username} 2>&1");
+        // Use nologin shell by default — shell access is admin-controlled via package
+        $shell = '/sbin/nologin';
+        $result = Process::run("sudo /usr/sbin/useradd -m -d {$home} -s {$shell} {$username} 2>&1");
 
         if ($result->failed()) {
             throw new \RuntimeException("Failed to create system user: " . ($result->errorOutput() ?: $result->output()));
         }
 
-        // Add nginx/apache to user's group so PHP-FPM can read files
+        // Add nginx/apache to user's group so web stack can read public files
         Process::run("sudo /usr/sbin/usermod -aG {$username} nginx 2>/dev/null || true");
         Process::run("sudo /usr/sbin/usermod -aG {$username} apache 2>/dev/null || true");
 
@@ -249,6 +370,7 @@ class AccountService
             'tmp',
             'mail',
             'backups',
+            'private',
             '.openpanel',
         ]);
         ShellService::runAsUser($username, "mkdir -p {$dirs}", 30, $home);
@@ -272,15 +394,38 @@ HTML;
         @unlink($tmpIndex);
 
         // Write .htaccess via temp file
-        $htaccess = <<<HTACCESS
+        $htaccess = <<<'HTACCESS'
 # Disable directory listing
 Options -Indexes
 
-# Protect .openpanel files
-<FilesMatch "^\.openpanel">
-    Order allow,deny
-    Deny from all
+# Block access to hidden files (except .htaccess itself)
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
 </FilesMatch>
+
+# Block access to sensitive files
+<FilesMatch "\.(env|bak|sql|log|conf|ini|sh|py|php\.)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Prevent PHP execution in uploads directory
+<IfModule mod_php.c>
+    <DirectoryMatch ".*/uploads/">
+        php_flag engine off
+    </DirectoryMatch>
+</IfModule>
 HTACCESS;
 
         $tmpHt = tempnam(sys_get_temp_dir(), 'ht');
@@ -289,8 +434,18 @@ HTACCESS;
         ShellService::runAsUser($username, "cp " . escapeshellarg($tmpHt) . " public_html/.htaccess", 10, $home);
         @unlink($tmpHt);
 
-        // Set permissions as user (owner can chmod own files)
-        ShellService::runAsUser($username, "chmod 711 . && chmod 755 public_html && chmod 700 .ssh && chmod 1777 tmp", 10, $home);
+        // Set permissions: home=711, public_html=750, private dirs=700, tmp=1777
+        ShellService::runAsUser($username, implode(' && ', [
+            'chmod 711 .',                    // home: owner=rwx, group=execute-only (traverse), other=execute-only
+            'chmod 750 public_html',           // web-readable but not world-readable
+            'chmod 700 .ssh',                  // SSH keys private
+            'chmod 700 private',               // private files owner-only
+            'chmod 700 backups',               // backups owner-only
+            'chmod 700 .openpanel',            // config owner-only
+            'chmod 700 tmp',                   // temp files owner-only (not world-writable)
+            'chmod 700 logs',                  // logs owner-only
+            'chmod 1777 public_html/cgi-bin',  // CGI tmp (sticky)
+        ]), 10, $home);
     }
 
     protected function createDnsZone(string $username, string $domain, string $ip): void
@@ -360,14 +515,28 @@ pm.max_children = 10
 pm.process_idle_timeout = 60s
 pm.max_requests = 500
 
+; Isolation: open_basedir restricted to user home + per-user tmp
+php_admin_value[open_basedir] = {$home}:/tmp
+php_admin_value[session.save_path] = {$home}/tmp
+php_admin_value[upload_tmp_dir] = {$home}/tmp
+php_admin_value[sys_temp_dir] = {$home}/tmp
+
+; Logging
 php_admin_value[error_log] = {$home}/logs/php-error.log
 php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+
+; Security
+php_admin_flag[expose_php] = off
+php_admin_value[disable_functions] = passthru,system,dl,putenv,pcntl_exec,proc_nice,proc_terminate,proc_close,show_source
+
+; Resource limits
 php_value[memory_limit] = 256M
 php_value[max_execution_time] = 60
+php_value[max_input_time] = 120
 php_value[upload_max_filesize] = 64M
 php_value[post_max_size] = 64M
-php_value[open_basedir] = {$home}:/tmp
-php_value[session.save_path] = {$home}/tmp
+php_value[max_file_uploads] = 20
 FPM;
 
         Process::run("mkdir -p {$this->phpFpmPoolDir}");

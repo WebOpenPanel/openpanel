@@ -48,6 +48,14 @@ class V1Controller extends Controller
         return $this->ok(['status' => 'ok', 'version' => '1.0.0']);
     }
 
+    public function abuseMonitor(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'admin:all')) return $r;
+
+        $result = \App\Services\AbuseMonitorService::scan();
+        return $this->ok($result);
+    }
+
     public function serverInfo(Request $request): JsonResponse
     {
         if ($r = $this->scope($request, 'accounts:read')) return $r;
@@ -188,6 +196,18 @@ class V1Controller extends Controller
                 ->where('username', $username)
                 ->update(['package' => $request->package, 'updated_at' => now()]);
             return $this->ok(['message' => "Package changed to '{$request->package}' for '{$username}'"]);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function accountRepairIsolation(Request $request, string $username): JsonResponse
+    {
+        if ($r = $this->scope($request, 'admin:all')) return $r;
+
+        try {
+            $result = (new AccountService())->repairUserIsolation($username);
+            return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
