@@ -31,7 +31,7 @@ class WebStackService
         ];
     }
 
-    public function getActiveStack(): string
+    public static function getActiveStack(): string
     {
         $settings = DB::connection('mysql')->table('web_stack_settings')->first();
         if ($settings && $settings->active_stack) {
