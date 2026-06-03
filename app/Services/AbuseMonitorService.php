@@ -119,9 +119,10 @@ class AbuseMonitorService
      */
     protected static function checkSuspiciousPhpFiles(): array
     {
-        $output = Process::timeout(30)->run(
-            "find /home -name '*.php' -newer /etc/hostname -exec grep -l -E '(eval\\s*\\(\\s*\\$_(GET|POST|REQUEST|COOKIE)|base64_decode\\s*\\(\\s*\\$_|system\\s*\\(\\s*\\$_|passthru|shell_exec\\s*\\(\\s*\\$_)' {} + 2>/dev/null | head -20"
-        )->output();
+        // Use single quotes for grep pattern to avoid PHP variable interpolation
+        $pattern = '(eval\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)|base64_decode\s*\(\s*\$_|system\s*\(\s*\$_|passthru|shell_exec\s*\(\s*\$_)';
+        $cmd = "find /home -name '*.php' -newer /etc/hostname -exec grep -l -E " . escapeshellarg($pattern) . " {} + 2>/dev/null | head -20";
+        $output = Process::timeout(30)->run($cmd)->output();
 
         $files = array_filter(explode("\n", trim($output)));
         if (empty($files)) return [];
