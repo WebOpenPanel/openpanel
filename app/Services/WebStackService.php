@@ -536,6 +536,27 @@ APACHE;
                 Process::run("cp {$apacheBackupPath} {$apacheVhostPath}");
                 Process::run("rm -f {$apacheBackupPath}");
                 $result['actions'][] = 'apache_vhost_restored';
+            } else {
+                // No backup — regenerate from account data
+                $account = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+                if ($account) {
+                    $home = "/home/{$username}";
+                    $apachePort = ($stack === 'nginx_apache' || $stack === 'nginx_varnish_apache') ? 8080 : 80;
+                    $this->generateApachePhpfpmVhost($username, $domain, $home, $apachePort);
+                    $result['actions'][] = 'apache_vhost_regenerated';
+                }
+            }
+
+            // If Apache config fails, regenerate as fallback
+            $apachectl = Process::run("apachectl -t 2>&1");
+            if ($apachectl->failed()) {
+                $account = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+                if ($account) {
+                    $home = "/home/{$username}";
+                    $apachePort = ($stack === 'nginx_apache' || $stack === 'nginx_varnish_apache') ? 8080 : 80;
+                    $this->generateApachePhpfpmVhost($username, $domain, $home, $apachePort);
+                    $result['actions'][] = 'apache_vhost_regenerated_fallback';
+                }
             }
         }
 
@@ -628,10 +649,7 @@ NGINX;
 
     protected function generateApachePhpfpmVhost(string $username, string $domain, string $home, int $port = 80): void
     {
-        $listen = $port !== 80 ? "Listen {$port}" : '';
-
         $vhost = <<<APACHE
-{$listen}
 <VirtualHost *:{$port}>
     ServerName {$domain}
     ServerAlias www.{$domain}
@@ -652,9 +670,8 @@ NGINX;
 </VirtualHost>
 APACHE;
 
-        $dir = $port !== 80 ? '/etc/httpd/conf.d/users' : '/etc/httpd/conf.d/users';
-        Process::run("mkdir -p {$dir}");
-        Process::run("cat > {$dir}/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
+        Process::run("mkdir -p /etc/httpd/conf.d/users");
+        Process::run("cat > /etc/httpd/conf.d/users/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
     }
 
     protected function generateNginxProxyVhost(string $username, string $domain, string $home, int $backendPort): void
