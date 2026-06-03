@@ -321,7 +321,9 @@ clone_project() {
 
     if [ -d "$INSTALL_DIR/.git" ]; then
         cd "$INSTALL_DIR"
+        git stash 2>&1 | tee -a "$LOG_FILE" || true
         git pull origin main 2>&1 | tee -a "$LOG_FILE"
+        git stash pop 2>&1 | tee -a "$LOG_FILE" || true
     else
         mkdir -p "$INSTALL_DIR"
         git clone "$GITHUB_REPO" "$INSTALL_DIR" 2>&1 | tee -a "$LOG_FILE"
