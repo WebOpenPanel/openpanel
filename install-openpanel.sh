@@ -779,7 +779,7 @@ NGINXV
 
     # Update DB stack setting (migrate defaults to nginx_phpfpm)
     if command -v mysql &>/dev/null; then
-        DB_NAME="${DB_DATABASE:-openpanel}"
+        DB_NAME="${DB_DATABASE:-open_panel}"
         mysql -e "UPDATE \`${DB_NAME}\`.\`web_stack_settings\` SET \`active_stack\`='nginx_varnish_apache' WHERE \`id\`=1;" 2>/dev/null || true
     fi
 
