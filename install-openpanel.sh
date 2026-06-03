@@ -504,8 +504,8 @@ server {
 
     location ~ \.php$ {
         fastcgi_pass unix:/run/php-fpm/www.sock;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include /etc/nginx/fastcgi_params;
         fastcgi_read_timeout 300;
         fastcgi_buffers 16 16k;
         fastcgi_buffer_size 32k;
@@ -555,8 +555,8 @@ server {
 
     location ~ \.php$ {
         fastcgi_pass unix:/run/php-fpm/www.sock;
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
-        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include /etc/nginx/fastcgi_params;
         fastcgi_read_timeout 300;
         fastcgi_buffers 16 16k;
         fastcgi_buffer_size 32k;
@@ -698,10 +698,37 @@ OVERRIDE
 configure_varnish_apache_nginx() {
     step "Configuring nginx_varnish_apache stack"
 
-    # Remove default nginx server block on port 80 to avoid conflict
-    if [ -f /etc/nginx/nginx.conf ]; then
-        sed -i '/^    server {/,/^    }/d' /etc/nginx/nginx.conf 2>/dev/null || true
-    fi
+    # Replace nginx.conf with clean version (no default server block on port 80)
+    cat > /etc/nginx/nginx.conf <<'NGINXMAIN'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /run/nginx.pid;
+
+include /usr/share/nginx/modules/*.conf;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 65;
+    types_hash_max_size 4096;
+    client_max_body_size 512M;
+
+    include /etc/nginx/conf.d/*.conf;
+}
+NGINXMAIN
 
     # Nginx: public 80/443 → proxy to Varnish 6081
     cat > /etc/nginx/conf.d/openpanel-stack.conf <<'NGINXV'
