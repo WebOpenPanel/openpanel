@@ -237,6 +237,8 @@ install_mariadb() {
     fi
 
     if mysqladmin -u root status &>/dev/null 2>&1; then
+        # Switch from unix_socket to password auth (AlmaLinux 9 default)
+        mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password;" 2>&1 | tee -a "$LOG_FILE"
         mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>&1 | tee -a "$LOG_FILE"
         log "MySQL root password set"
     else
@@ -245,6 +247,9 @@ install_mariadb() {
             err "Cannot connect to MySQL with provided password"
         fi
     fi
+
+    # Ensure root uses password auth (not unix_socket) so Laravel can connect
+    mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password USING PASSWORD('$MYSQL_ROOT_PASSWORD');" 2>&1 | tee -a "$LOG_FILE" || true
 
     mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<EOSQL
 DELETE FROM mysql.user WHERE User='';
