@@ -601,6 +601,154 @@ EONGX2
     log "Nginx configured on port 2087"
 }
 
+install_httpd() {
+    step "Installing Apache (httpd)"
+    dnf -y install httpd 2>&1 | tee -a "$LOG_FILE"
+
+    # Configure Apache to listen on 8080 (backend)
+    sed -i 's/^Listen 80$/Listen 8080/' /etc/httpd/conf/httpd.conf 2>/dev/null || true
+    sed -i 's/^Listen 80 /Listen 8080 /' /etc/httpd/conf/httpd.conf 2>/dev/null || true
+
+    # Enable PHP-FPM for Apache
+    if [ -f /etc/httpd/conf.modules.d/00-proxy.conf ]; then
+        sed -i 's/^#\(.*proxy_fcgi.*\)/\1/' /etc/httpd/conf.modules.d/00-proxy.conf 2>/dev/null || true
+    fi
+
+    # Add PHP-FPM handler
+    cat > /etc/httpd/conf.d/php-fpm.conf <<'APACHEPHP'
+<FilesMatch \.php$>
+    SetHandler "proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"
+</FilesMatch>
+APACHEPHP
+
+    systemctl enable httpd 2>&1 | tee -a "$LOG_FILE"
+    log "Apache installed on port 8080"
+}
+
+install_varnish() {
+    step "Installing Varnish"
+
+    # Install from EPEL or Varnish repo
+    dnf -y install epel-release 2>&1 | tee -a "$LOG_FILE" || true
+    dnf -y install varnish 2>&1 | tee -a "$LOG_FILE" || {
+        # If not available in default repos, try Varnish Cache repo
+        cat > /etc/yum.repos.d/varnish.repo <<'REPO'
+[varnishcache_varnish70]
+name=varnishcache_varnish70
+baseurl=https://packagecloud.io/varnishcache/varnish70/el/9/$basearch
+repo_gpgcheck=0
+gpgcheck=0
+enabled=1
+gpgkey=https://packagecloud.io/varnishcache/varnish70/gpgkey
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+metadata_expire=300
+REPO
+        dnf -y install varnish 2>&1 | tee -a "$LOG_FILE"
+    }
+
+    # Configure default VCL
+    mkdir -p /etc/varnish/conf.d/users
+    cat > /etc/varnish/default.vcl <<'VCL'
+vcl 4.0;
+
+backend default {
+    .host = "127.0.0.1";
+    .port = "8080";
+}
+
+sub vcl_recv {
+    set req.http.X-Forwarded-For = client.ip;
+    set req.http.X-Real-IP = client.ip;
+}
+
+sub vcl_backend_response {
+    if (bereq.url ~ "\.(css|js|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp)(\?.*)?$") {
+        set beresp.ttl = 30d;
+    }
+}
+
+sub vcl_deliver {
+    if (obj.hits > 0) {
+        set resp.http.X-Cache = "HIT";
+    } else {
+        set resp.http.X-Cache = "MISS";
+    }
+}
+VCL
+
+    # Set Varnish to listen on 6081
+    if [ -f /etc/varnish/varnish.params ]; then
+        sed -i 's/^VARNISH_LISTEN_ADDRESS=.*/VARNISH_LISTEN_ADDRESS=127.0.0.1/' /etc/varnish/varnish.params 2>/dev/null || true
+        sed -i 's/^VARNISH_LISTEN_PORT=.*/VARNISH_LISTEN_PORT=6081/' /etc/varnish/varnish.params 2>/dev/null || true
+    fi
+    # Override systemd to use port 6081
+    mkdir -p /etc/systemd/system/varnish.service.d
+    cat > /etc/systemd/system/varnish.service.d/override.conf <<'OVERRIDE'
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/varnishd -a 127.0.0.1:6081 -f /etc/varnish/default.vcl -s malloc,256m
+OVERRIDE
+    systemctl daemon-reload
+
+    systemctl enable varnish 2>&1 | tee -a "$LOG_FILE"
+    log "Varnish installed on port 6081 (backend: Apache 8080)"
+}
+
+configure_varnish_apache_nginx() {
+    step "Configuring nginx_varnish_apache stack"
+
+    # Remove default nginx server block on port 80 to avoid conflict
+    if [ -f /etc/nginx/nginx.conf ]; then
+        sed -i '/^    server {/,/^    }/d' /etc/nginx/nginx.conf 2>/dev/null || true
+    fi
+
+    # Nginx: public 80/443 → proxy to Varnish 6081
+    cat > /etc/nginx/conf.d/openpanel-stack.conf <<'NGINXV'
+server {
+    listen 80;
+    server_name _;
+    location / {
+        proxy_pass http://127.0.0.1:6081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+server {
+    listen 443 ssl http2;
+    server_name _;
+    ssl_certificate /etc/pki/tls/certs/openpanel.crt;
+    ssl_certificate_key /etc/pki/tls/private/openpanel.key;
+    location / {
+        proxy_pass http://127.0.0.1:6081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NGINXV
+
+    nginx -t 2>&1 | tee -a "$LOG_FILE" || err "Nginx stack config failed"
+    systemctl restart nginx
+
+    # Apache: backend 8080
+    httpd -t 2>&1 | tee -a "$LOG_FILE" || warn "Apache config test failed"
+    systemctl restart httpd
+
+    # Varnish: 6081 → Apache 8080
+    varnishd -C -f /etc/varnish/default.vcl 2>&1 | tee -a "$LOG_FILE" || warn "Varnish VCL test failed"
+    systemctl restart varnish
+
+    # Save stack setting
+    mkdir -p /etc/openpanel
+    echo "nginx_varnish_apache" > /etc/openpanel/web_stack
+
+    log "Stack nginx_varnish_apache configured: nginx(80/443) → varnish(6081) → apache(8080)"
+}
+
 generate_ssl() {
     step "Generating SSL Certificate"
 
@@ -924,6 +1072,14 @@ main() {
         build_assets
         generate_ssl
         configure_nginx
+        if [[ "${OPENPANEL_WEB_STACK:-nginx_phpfpm}" == "nginx_varnish_apache" ]]; then
+            install_httpd
+            install_varnish
+            configure_varnish_apache_nginx
+        else
+            mkdir -p /etc/openpanel
+            echo "nginx_phpfpm" > /etc/openpanel/web_stack
+        fi
         setup_sudoers
         setup_cron
         optimize_app
