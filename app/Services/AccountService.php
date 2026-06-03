@@ -571,6 +571,9 @@ HTACCESS;
 
         // Set ownership and permissions using sudo
         Process::run("sudo chown -R {$username}:{$username} " . escapeshellarg($home));
+        // Fix file permissions — tempnam() creates 600, need 644 for web-readable
+        Process::run("sudo find " . escapeshellarg($home) . " -type f -exec chmod 644 {} +");
+        Process::run("sudo find " . escapeshellarg($home) . " -type d -exec chmod 755 {} +");
 
         $perms = [
             '.' => '711',

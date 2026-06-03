@@ -457,6 +457,13 @@ NGINX;
         @unlink($tmp);
         $result['actions'][] = 'nginx_suspended_vhost_written';
 
+        // 2b. Remove normal nginx vhost so suspended vhost takes effect
+        $normalVhost = "/etc/nginx/conf.d/users/{$username}.conf";
+        if (file_exists($normalVhost)) {
+            Process::run("sudo mv " . escapeshellarg($normalVhost) . " " . escapeshellarg($normalVhost . '.suspended'));
+            $result['actions'][] = 'normal_vhost_backed_up';
+        }
+
         // 3. For apache-based stacks: replace Apache vhost with 403
         if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'])) {
             $apacheVhostPath = "/etc/httpd/conf.d/users/{$username}.conf";
@@ -528,13 +535,21 @@ APACHE;
         $result = ['stack' => $stack, 'actions' => [], 'success' => true];
 
         // 1. Remove suspended state marker
-        @unlink("/etc/openpanel/suspended/{$domain}");
+        Process::run("sudo rm -f " . escapeshellarg("/etc/openpanel/suspended/{$domain}"));
         $result['actions'][] = 'suspended_marker_removed';
 
-        // 2. Remove nginx suspended vhost
+        // 2. Remove nginx suspended vhost and restore normal vhost
         $suspendConfPath = "/etc/nginx/conf.d/suspended-{$username}.conf";
-        @unlink($suspendConfPath);
+        Process::run("sudo rm -f " . escapeshellarg($suspendConfPath));
         $result['actions'][] = 'nginx_suspended_vhost_removed';
+
+        // 2b. Restore normal nginx vhost
+        $normalVhost = "/etc/nginx/conf.d/users/{$username}.conf";
+        $backupVhost = "{$normalVhost}.suspended";
+        if (file_exists($backupVhost)) {
+            Process::run("sudo mv " . escapeshellarg($backupVhost) . " " . escapeshellarg($normalVhost));
+            $result['actions'][] = 'normal_vhost_restored';
+        }
 
         // 3. Restore Apache vhost for apache-based stacks
         if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'])) {
