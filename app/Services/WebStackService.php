@@ -900,7 +900,7 @@ VCL;
         }
     }
 
-    protected function getStackServices(string $stack): array
+    public function getStackServices(string $stack): array
     {
         return match ($stack) {
             'nginx_phpfpm' => ['php-fpm', 'nginx'],
