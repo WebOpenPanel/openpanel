@@ -623,12 +623,33 @@ BIND;
         Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($zoneFile));
         Process::run("sudo chown named:named " . escapeshellarg($zoneFile));
         @unlink($tmp);
+
+        // Register zone in named.conf (idempotent — skip if already present)
+        $namedConf = '/etc/named.conf';
+        $check = Process::run("sudo grep -q " . escapeshellarg("zone \"{$domain}\"") . " " . escapeshellarg($namedConf) . " 2>/dev/null");
+        if ($check->failed()) {
+            $zoneBlock = "\nzone \"{$domain}\" IN {\n    type master;\n    file \"{$zoneFile}\";\n    allow-update { none; };\n};\n";
+            $tmpZ = tempnam(sys_get_temp_dir(), 'zblk');
+            file_put_contents($tmpZ, $zoneBlock);
+            Process::run("sudo bash -c " . escapeshellarg("cat " . escapeshellarg($tmpZ) . " >> " . escapeshellarg($namedConf)));
+            @unlink($tmpZ);
+        }
+
+        // Validate and reload named
+        $check = Process::run("sudo named-checkconf 2>/dev/null");
+        if ($check->successful()) {
+            Process::run("sudo systemctl reload named 2>/dev/null");
+        }
     }
 
     protected function removeDnsZone(string $username, string $domain): void
     {
         $zoneFile = "{$this->dnsZoneDir}/{$domain}.db";
         Process::run("sudo rm -f " . escapeshellarg($zoneFile));
+
+        // Remove zone block from named.conf
+        Process::run("sudo sed -i '/zone \"{$domain}\"/,/};/d' /etc/named.conf 2>/dev/null");
+        Process::run("sudo systemctl reload named 2>/dev/null");
     }
 
     // =========================================================================

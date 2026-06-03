@@ -881,15 +881,23 @@ install_dns() {
         cp /etc/named.conf /etc/named.conf.bak.$(date +%s) 2>/dev/null || true
     fi
 
-    # Allow queries from localhost and local networks
-    if ! grep -q "allow-query.*localhost" /etc/named.conf 2>/dev/null; then
-        sed -i 's/listen-on port 53.*/listen-on port 53 { 127.0.0.1; any; };/' /etc/named.conf 2>/dev/null || true
-        sed -i 's/listen-on-v6.*/listen-on-v6 port 53 { ::1; any; };/' /etc/named.conf 2>/dev/null || true
-        sed -i 's/allow-query.*/allow-query { localhost; any; };/' /etc/named.conf 2>/dev/null || true
-    fi
+    # Allow queries from any client (required for hosting DNS)
+    sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { 127.0.0.1; any; };/' /etc/named.conf 2>/dev/null || true
+    sed -i 's/listen-on-v6 port 53 { ::1; };/listen-on-v6 port 53 { ::1; any; };/' /etc/named.conf 2>/dev/null || true
+    sed -i 's/allow-query     { localhost; };/allow-query     { localhost; any; };/' /etc/named.conf 2>/dev/null || true
 
-    systemctl enable named
-    systemctl restart named 2>&1 | tee -a "$LOG_FILE" || warn "Named failed to start"
+    # Validate config before starting
+    if named-checkconf 2>/dev/null; then
+        systemctl enable named
+        systemctl restart named 2>&1 | tee -a "$LOG_FILE" || warn "Named failed to start"
+    else
+        warn "named.conf validation failed — restoring backup"
+        local latest_bak
+        latest_bak=$(ls -t /etc/named.conf.bak.* 2>/dev/null | head -1)
+        [ -n "$latest_bak" ] && cp "$latest_bak" /etc/named.conf
+        systemctl enable named
+        systemctl restart named 2>&1 | tee -a "$LOG_FILE" || warn "Named still failed after backup restore"
+    fi
 
     log "BIND DNS installed"
 }
