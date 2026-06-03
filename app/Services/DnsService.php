@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Services;
 
@@ -333,17 +333,17 @@ class DnsService
     public static function rebuildAllZones(): string
     {
         $output = '';
-        $users = DB::connection('sqlite')->table('user')->where('id', '!=', '')->get();
+        $users = DB::connection('mysql')->table('user')->where('id', '!=', '')->get();
 
         foreach ($users as $user) {
             $dnsEmail = self::dnsEmail($user->email ?? '');
             self::addZoneForce($user->domain, $user->ip_address, $dnsEmail, 'none');
 
-            $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+            $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
             foreach ($domains as $d) {
                 self::addZoneForce($d->domain, $user->ip_address, $dnsEmail, 'none');
 
-                $subdomains = DB::connection('sqlite')->table('subdomains')
+                $subdomains = DB::connection('mysql')->table('subdomains')
                     ->where('user', $user->username)
                     ->where('domain', $d->domain)
                     ->get();
@@ -359,7 +359,7 @@ class DnsService
 
     public static function rebuildZone(string $username, string $domain): bool
     {
-        $users = DB::connection('sqlite')->table('user')->where('username', $username)->get();
+        $users = DB::connection('mysql')->table('user')->where('username', $username)->get();
         if ($users->isEmpty()) return false;
 
         foreach ($users as $user) {
@@ -368,11 +368,11 @@ class DnsService
                 self::addZoneForce($domain, $user->ip_address, $dnsEmail, 'restart');
             } else {
                 $found = false;
-                $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+                $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
                 foreach ($domains as $d) {
                     if ($domain === $d->domain) {
                         self::addZoneForce($d->domain, $user->ip_address, $dnsEmail, 'none');
-                        $subdomains = DB::connection('sqlite')->table('subdomains')
+                        $subdomains = DB::connection('mysql')->table('subdomains')
                             ->where('user', $user->username)
                             ->where('domain', $d->domain)
                             ->get();
@@ -412,10 +412,10 @@ class DnsService
 
         file_put_contents(self::NAMED_CONF, $defaultOptions);
 
-        $users = DB::connection('sqlite')->table('user')->where('id', '!=', '')->get();
+        $users = DB::connection('mysql')->table('user')->where('id', '!=', '')->get();
         foreach ($users as $user) {
             self::addDomainToNamedConf($user->domain);
-            $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+            $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
             foreach ($domains as $d) {
                 self::addDomainToNamedConf($d->domain);
             }
@@ -525,7 +525,7 @@ imap    14400   IN      A       %ip%
     public static function getNameservers(): array
     {
         try {
-            $row = DB::connection('sqlite')->table('nameserver')->first();
+            $row = DB::connection('mysql')->table('nameserver')->first();
             if ($row) {
                 return [
                     'ns1' => $row->ns1_name ?? 'ns1.example.com',
@@ -541,7 +541,7 @@ imap    14400   IN      A       %ip%
     public static function setNameservers(string $ns1, string $ns2, string $ns1Ip, string $ns2Ip): bool
     {
         try {
-            DB::connection('sqlite')->table('nameserver')->update([
+            DB::connection('mysql')->table('nameserver')->update([
                 'ns1_name' => $ns1,
                 'ns2_name' => $ns2,
                 'ns1_ip' => $ns1Ip,
@@ -659,12 +659,12 @@ imap    14400   IN      A       %ip%
     public static function addDkimAll(): array
     {
         $results = [];
-        $users = DB::connection('sqlite')->table('user')->where('id', '!=', '')->get();
+        $users = DB::connection('mysql')->table('user')->where('id', '!=', '')->get();
         foreach ($users as $user) {
             $domain = $user->domain;
             $results[$domain] = self::addDkim($domain);
 
-            $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+            $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
             foreach ($domains as $d) {
                 $results[$d->domain] = self::addDkim($d->domain);
             }
@@ -760,9 +760,9 @@ imap    14400   IN      A       %ip%
         if (!$manager) return null;
 
         $domainArray = [];
-        $users = DB::connection('sqlite')->table('user')->where('id', '!=', '')->orderBy('username')->get();
+        $users = DB::connection('mysql')->table('user')->where('id', '!=', '')->orderBy('username')->get();
         foreach ($users as $user) {
-            $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+            $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
             foreach ($domains as $d) {
                 $domainArray[] = ['master' => $masterIp, 'domain' => $d->domain];
             }
@@ -779,9 +779,9 @@ imap    14400   IN      A       %ip%
         if (!$manager) return null;
 
         $domainArray = [];
-        $users = DB::connection('sqlite')->table('user')->where('id', '!=', '')->orderBy('username')->get();
+        $users = DB::connection('mysql')->table('user')->where('id', '!=', '')->orderBy('username')->get();
         foreach ($users as $user) {
-            $domains = DB::connection('sqlite')->table('domains')->where('user', $user->username)->get();
+            $domains = DB::connection('mysql')->table('domains')->where('user', $user->username)->get();
             foreach ($domains as $d) {
                 $domainArray[] = ['domain' => $d->domain];
             }

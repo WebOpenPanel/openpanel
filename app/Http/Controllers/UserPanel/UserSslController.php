@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Http\Controllers\UserPanel;
 
@@ -17,7 +17,7 @@ class UserSslController extends Controller
     public function index()
     {
         $username = $this->username();
-        $domains = DB::connection('sqlite')->table('domains')
+        $domains = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->get();
 
@@ -36,7 +36,7 @@ class UserSslController extends Controller
     public function generate()
     {
         $username = $this->username();
-        $domains = DB::connection('sqlite')->table('domains')
+        $domains = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->pluck('domain');
 
@@ -48,7 +48,7 @@ class UserSslController extends Controller
         $request->validate(['domain' => 'required|string']);
         $username = $this->username();
 
-        $owned = DB::connection('sqlite')->table('domains')
+        $owned = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->where('domain', $request->domain)
             ->exists();
@@ -74,7 +74,7 @@ class UserSslController extends Controller
         $request->validate(['domain' => 'required|string']);
         $username = $this->username();
 
-        $owned = DB::connection('sqlite')->table('domains')
+        $owned = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->where('domain', $request->domain)
             ->exists();

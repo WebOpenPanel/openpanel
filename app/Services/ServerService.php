@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Services;
 
@@ -518,7 +518,7 @@ class ServerService
         $type = self::getQuotaType();
         $softStr = $soft > 0 ? $soft . 'M' : '0';
         $hardStr = $hard > 0 ? $hard . 'M' : '0';
-        $users = \Illuminate\Support\Facades\DB::connection('sqlite')->table('user')->where('id', '!=', '')->get();
+        $users = \Illuminate\Support\Facades\DB::connection('mysql')->table('user')->where('id', '!=', '')->get();
         $output = '';
         foreach ($users as $user) {
             $output .= ShellService::exec("setquota -u -F {$type} " . escapeshellarg($user->username) . " {$softStr} {$hardStr} 0 0 {$part} 2>&1");

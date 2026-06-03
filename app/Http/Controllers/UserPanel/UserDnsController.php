@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Http\Controllers\UserPanel;
 
@@ -17,7 +17,7 @@ class UserDnsController extends Controller
     public function index()
     {
         $username = $this->username();
-        $domains = DB::connection('sqlite')->table('domains')
+        $domains = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->get();
 
@@ -27,7 +27,7 @@ class UserDnsController extends Controller
     public function show(string $domain)
     {
         $username = $this->username();
-        $owned = DB::connection('sqlite')->table('domains')
+        $owned = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->where('domain', $domain)
             ->exists();
@@ -68,7 +68,7 @@ class UserDnsController extends Controller
         ]);
 
         $username = $this->username();
-        $owned = DB::connection('sqlite')->table('domains')
+        $owned = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->where('domain', $request->domain)
             ->exists();
@@ -106,7 +106,7 @@ class UserDnsController extends Controller
         ]);
 
         $username = $this->username();
-        $owned = DB::connection('sqlite')->table('domains')
+        $owned = DB::connection('mysql')->table('domains')
             ->where('user', $username)
             ->where('domain', $request->domain)
             ->exists();

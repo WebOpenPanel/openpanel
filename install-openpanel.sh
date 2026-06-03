@@ -637,6 +637,16 @@ EOSQL
     sed -i "s|#home_mailbox = Maildir/|home_mailbox = Maildir/|" /etc/postfix/main.cf
     sed -i "s|^myhostname =.*|myhostname = ${HOSTNAME}|" /etc/postfix/main.cf
 
+    # Configure Dovecot for PAM auth + Maildir
+    if [ -f /etc/dovecot/conf.d/10-auth.conf ]; then
+        sed -i 's/^disable_plaintext_auth = yes/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true
+        sed -i 's/^#disable_plaintext_auth = yes/disable_plaintext_auth = no/' /etc/dovecot/conf.d/10-auth.conf 2>/dev/null || true
+    fi
+    if [ -f /etc/dovecot/conf.d/10-mail.conf ]; then
+        sed -i 's|^#mail_location =.*|mail_location = maildir:~/Maildir|' /etc/dovecot/conf.d/10-mail.conf 2>/dev/null || true
+        sed -i 's|^mail_location =.*|mail_location = maildir:~/Maildir|' /etc/dovecot/conf.d/10-mail.conf 2>/dev/null || true
+    fi
+
     systemctl enable postfix dovecot
     systemctl restart postfix dovecot
 
@@ -673,6 +683,8 @@ install_ftp() {
     if [ -f /etc/pure-ftpd/pure-ftpd.conf ]; then
         cp /etc/pure-ftpd/pure-ftpd.conf /etc/pure-ftpd/pure-ftpd.conf.bak.$(date +%s) 2>/dev/null || true
         sed -i 's/^# PureDB/PureDB/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
+        sed -i 's|PureDB.*@sysconfigdir@.*|PureDB /etc/pure-ftpd/pureftpd.pdb|' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
+        sed -i 's|^PureDB.*pureftpd.pdb$|PureDB /etc/pure-ftpd/pureftpd.pdb|' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
         sed -i 's/^# NoAnonymous/NoAnonymous/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
     fi
 
@@ -763,6 +775,27 @@ install_redis() {
     else
         warn "Redis installed but not running"
     fi
+}
+
+setup_sudoers() {
+    log "Configuring sudoers for panel operations..."
+    cat > /etc/sudoers.d/openpanel <<'SUDOERS'
+# OpenPanel: allow web panel to manage users and services
+nginx ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod
+nginx ALL=(root) NOPASSWD: /usr/bin/passwd, /usr/sbin/chpasswd
+nginx ALL=(root) NOPASSWD: /usr/bin/chage
+nginx ALL=(root) NOPASSWD: /usr/sbin/semanage, /usr/sbin/restorecon
+nginx ALL=(root) NOPASSWD: /usr/bin/systemctl restart php-fpm, /usr/bin/systemctl reload php-fpm
+nginx ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
+apache ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod
+apache ALL=(root) NOPASSWD: /usr/bin/passwd, /usr/sbin/chpasswd
+apache ALL=(root) NOPASSWD: /usr/bin/chage
+apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart php-fpm, /usr/bin/systemctl reload php-fpm
+apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx
+apache ALL=(root) NOPASSWD: /usr/bin/systemctl restart httpd, /usr/bin/systemctl reload httpd
+SUDOERS
+    chmod 440 /etc/sudoers.d/openpanel
+    log "Sudoers configured"
 }
 
 save_credentials() {
@@ -857,6 +890,7 @@ main() {
         build_assets
         generate_ssl
         configure_nginx
+        setup_sudoers
         setup_cron
         optimize_app
         install_mail

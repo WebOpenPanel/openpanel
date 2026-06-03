@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Http\Controllers\Api;
 
@@ -41,7 +41,7 @@ class V1Controller extends Controller
         return $denied;
     }
 
-    // ─── Health / Server ───────────────────────────────────────
+    // â”€â”€â”€ Health / Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function health(): JsonResponse
     {
@@ -58,9 +58,9 @@ class V1Controller extends Controller
         $php = phpversion();
         $stack = (new WebStackService())->getActiveStack();
 
-        $accountCount = DB::connection('sqlite')->table('accounts')->count();
+        $accountCount = DB::connection('mysql')->table('accounts')->count();
         $wpCount = 0;
-        try { $wpCount = DB::connection('sqlite')->table('wordpress_sites')->whereNull('deleted_at')->count(); } catch (\Exception $e) {}
+        try { $wpCount = DB::connection('mysql')->table('wordpress_sites')->whereNull('deleted_at')->count(); } catch (\Exception $e) {}
 
         return $this->ok([
             'hostname' => $hostname,
@@ -73,17 +73,17 @@ class V1Controller extends Controller
         ]);
     }
 
-    // ─── Packages ──────────────────────────────────────────────
+    // â”€â”€â”€ Packages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function packages(Request $request): JsonResponse
     {
         if ($r = $this->scope($request, 'accounts:read')) return $r;
 
-        $packages = DB::connection('sqlite')->table('packages')->get();
+        $packages = DB::connection('mysql')->table('packages')->get();
         return $this->ok(['packages' => $packages]);
     }
 
-    // ─── Accounts ──────────────────────────────────────────────
+    // â”€â”€â”€ Accounts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function accountCreate(Request $request): JsonResponse
     {
@@ -184,7 +184,7 @@ class V1Controller extends Controller
         $request->validate(['package' => 'required|string']);
 
         try {
-            DB::connection('sqlite')->table('accounts')
+            DB::connection('mysql')->table('accounts')
                 ->where('username', $username)
                 ->update(['package' => $request->package, 'updated_at' => now()]);
             return $this->ok(['message' => "Package changed to '{$request->package}' for '{$username}'"]);
@@ -222,7 +222,7 @@ class V1Controller extends Controller
         ]);
     }
 
-    // ─── WordPress ─────────────────────────────────────────────
+    // â”€â”€â”€ WordPress â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function wpInstall(Request $request): JsonResponse
     {
@@ -368,7 +368,7 @@ class V1Controller extends Controller
         return $this->ok(['site' => $data]);
     }
 
-    // ─── DNS ───────────────────────────────────────────────────
+    // â”€â”€â”€ DNS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function dnsZoneCreate(Request $request): JsonResponse
     {
@@ -400,10 +400,10 @@ class V1Controller extends Controller
 
         try {
             // Add record by saving to zone file via DB
-            $zone = DB::connection('sqlite')->table('dns_zones')->where('domain', $request->domain)->first();
+            $zone = DB::connection('mysql')->table('dns_zones')->where('domain', $request->domain)->first();
             if (!$zone) return $this->fail('Zone not found', 404);
 
-            DB::connection('sqlite')->table('dns_records')->insert([
+            DB::connection('mysql')->table('dns_records')->insert([
                 'zone_id' => $zone->id,
                 'name' => $request->name,
                 'type' => $request->type,
@@ -427,12 +427,12 @@ class V1Controller extends Controller
         $request->validate(['record_id' => 'required|integer']);
 
         try {
-            $record = DB::connection('sqlite')->table('dns_records')->find($request->record_id);
+            $record = DB::connection('mysql')->table('dns_records')->find($request->record_id);
             if (!$record) return $this->fail('Record not found', 404);
 
-            DB::connection('sqlite')->table('dns_records')->where('id', $request->record_id)->delete();
+            DB::connection('mysql')->table('dns_records')->where('id', $request->record_id)->delete();
 
-            $zone = DB::connection('sqlite')->table('dns_zones')->find($record->zone_id);
+            $zone = DB::connection('mysql')->table('dns_zones')->find($record->zone_id);
             if ($zone) \App\Services\DnsService::reloadZone($zone->domain);
 
             return $this->ok(['message' => 'Record deleted']);
@@ -445,14 +445,14 @@ class V1Controller extends Controller
     {
         if ($r = $this->scope($request, 'dns:manage')) return $r;
 
-        $zone = DB::connection('sqlite')->table('dns_zones')->where('domain', $domain)->first();
+        $zone = DB::connection('mysql')->table('dns_zones')->where('domain', $domain)->first();
         if (!$zone) return $this->fail('Zone not found', 404);
 
-        $records = DB::connection('sqlite')->table('dns_records')->where('zone_id', $zone->id)->get();
+        $records = DB::connection('mysql')->table('dns_records')->where('zone_id', $zone->id)->get();
         return $this->ok(['zone' => $zone, 'records' => $records]);
     }
 
-    // ─── Email ─────────────────────────────────────────────────
+    // â”€â”€â”€ Email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function emailCreate(Request $request): JsonResponse
     {
@@ -469,7 +469,7 @@ class V1Controller extends Controller
             $result = Process::run("doveadm pw -s SHA512-CRYPT -p '{$request->password}' 2>/dev/null");
             $hash = trim($result->output());
 
-            DB::connection('sqlite')->table('email_accounts')->insert([
+            DB::connection('mysql')->table('email_accounts')->insert([
                 'domain' => $request->domain,
                 'username' => $request->username,
                 'password' => $hash,
@@ -497,7 +497,7 @@ class V1Controller extends Controller
 
         try {
             [$username, $domain] = explode('@', $request->email);
-            DB::connection('sqlite')->table('email_accounts')
+            DB::connection('mysql')->table('email_accounts')
                 ->where('domain', $domain)->where('username', $username)->delete();
 
             // Remove maildir
@@ -520,7 +520,7 @@ class V1Controller extends Controller
             $result = Process::run("doveadm pw -s SHA512-CRYPT -p '{$request->password}' 2>/dev/null");
             $hash = trim($result->output());
 
-            DB::connection('sqlite')->table('email_accounts')
+            DB::connection('mysql')->table('email_accounts')
                 ->where('domain', $domain)->where('username', $username)
                 ->update(['password' => $hash, 'updated_at' => now()]);
 
@@ -534,7 +534,7 @@ class V1Controller extends Controller
     {
         if ($r = $this->scope($request, 'email:manage')) return $r;
 
-        $query = DB::connection('sqlite')->table('email_accounts');
+        $query = DB::connection('mysql')->table('email_accounts');
         if ($request->domain) {
             $query->where('domain', $request->domain);
         }
@@ -542,7 +542,7 @@ class V1Controller extends Controller
         return $this->ok(['accounts' => $accounts]);
     }
 
-    // ─── Database ──────────────────────────────────────────────
+    // â”€â”€â”€ Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function dbCreate(Request $request): JsonResponse
     {
@@ -609,7 +609,7 @@ class V1Controller extends Controller
         }
     }
 
-    // ─── SSL ───────────────────────────────────────────────────
+    // â”€â”€â”€ SSL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function sslIssue(Request $request): JsonResponse
     {
@@ -664,7 +664,7 @@ class V1Controller extends Controller
         ]);
     }
 
-    // ─── Helpers ───────────────────────────────────────────────
+    // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private function findSite(int $id, string $domain): ?WordPressSite
     {

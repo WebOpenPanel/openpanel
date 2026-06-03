@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Http\Controllers;
 
@@ -28,7 +28,7 @@ class DashboardController extends Controller
         $suspended = 0;
 
         try {
-            $rows = DB::connection('sqlite')->table('accounts')->get();
+            $rows = DB::connection('mysql')->table('accounts')->get();
             $total = $rows->count();
             $active = $rows->where('status', 'active')->count();
             $suspended = $rows->where('status', 'suspended')->count();

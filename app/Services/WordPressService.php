@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Services;
 
@@ -106,7 +106,7 @@ class WordPressService
 
         $account = UserAccount::find($params['user_account_id']);
         if (!$account) {
-            $account = DB::connection('sqlite')->table('accounts')->where('id', $params['user_account_id'])->first();
+            $account = DB::connection('mysql')->table('accounts')->where('id', $params['user_account_id'])->first();
         }
         if (!$account) {
             return ['success' => false, 'message' => 'Account not found.'];
@@ -930,7 +930,7 @@ class WordPressService
         if ($account) {
             return $account->user?->username ?? $account->username ?? '';
         }
-        $account = DB::connection('sqlite')->table('accounts')->where('id', $site->user_account_id)->first();
+        $account = DB::connection('mysql')->table('accounts')->where('id', $site->user_account_id)->first();
         return $account->username ?? '';
     }
 
@@ -1237,7 +1237,7 @@ sub vcl_recv {
             return (pass);
         }
 
-        # Strip cookies for static assets — cache aggressively
+        # Strip cookies for static assets â€” cache aggressively
         if (req.url ~ "\\.(css|js|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)(\\?.*)?$") {
             unset req.http.Cookie;
             return (hash);

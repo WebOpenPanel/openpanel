@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Services;
 
@@ -11,8 +11,8 @@ class WebStackService
     public const STACKS = [
         'nginx_phpfpm' => 'Nginx + PHP-FPM',
         'apache_phpfpm' => 'Apache + PHP-FPM',
-        'nginx_apache' => 'Nginx → Apache + PHP-FPM',
-        'nginx_varnish_apache' => 'Nginx → Varnish → Apache + PHP-FPM',
+        'nginx_apache' => 'Nginx â†’ Apache + PHP-FPM',
+        'nginx_varnish_apache' => 'Nginx â†’ Varnish â†’ Apache + PHP-FPM',
     ];
 
     protected string $backupDir = '/usr/local/openpanel/backups/stack';
@@ -33,13 +33,13 @@ class WebStackService
 
     public function getActiveStack(): string
     {
-        $settings = DB::connection('sqlite')->table('web_stack_settings')->first();
+        $settings = DB::connection('mysql')->table('web_stack_settings')->first();
         return $settings ? $settings->active_stack : 'nginx_phpfpm';
     }
 
     public function getStackConfig(): ?object
     {
-        return DB::connection('sqlite')->table('web_stack_settings')->first();
+        return DB::connection('mysql')->table('web_stack_settings')->first();
     }
 
     public function getAvailableStacks(): array
@@ -187,7 +187,7 @@ class WebStackService
             return ['success' => false, 'message' => "Stack '{$newStack}' is already active."];
         }
 
-        $historyId = DB::connection('sqlite')->table('web_stack_history')->insertGetId([
+        $historyId = DB::connection('mysql')->table('web_stack_history')->insertGetId([
             'from_stack' => $currentStack,
             'to_stack' => $newStack,
             'status' => 'in_progress',
@@ -201,7 +201,7 @@ class WebStackService
 
             $validation = $this->validateStack($newStack);
             if (!$validation['valid']) {
-                DB::connection('sqlite')->table('web_stack_history')->where('id', $historyId)->update([
+                DB::connection('mysql')->table('web_stack_history')->where('id', $historyId)->update([
                     'status' => 'failed',
                     'validation_output' => implode("\n", $validation['errors']),
                     'updated_at' => now(),
@@ -221,7 +221,7 @@ class WebStackService
             if (!$healthCheck['healthy']) {
                 Log::warning("Stack switch health check failed, rolling back", $healthCheck);
                 $this->rollbackStack();
-                DB::connection('sqlite')->table('web_stack_history')->where('id', $historyId)->update([
+                DB::connection('mysql')->table('web_stack_history')->where('id', $historyId)->update([
                     'status' => 'rolled_back',
                     'validation_output' => 'Health check failed: ' . implode(', ', $healthCheck['issues']),
                     'updated_at' => now(),
@@ -233,7 +233,7 @@ class WebStackService
                 ];
             }
 
-            DB::connection('sqlite')->table('web_stack_settings')->updateOrInsert(
+            DB::connection('mysql')->table('web_stack_settings')->updateOrInsert(
                 ['id' => 1],
                 [
                     'active_stack' => $newStack,
@@ -244,7 +244,7 @@ class WebStackService
                 ]
             );
 
-            DB::connection('sqlite')->table('web_stack_history')->where('id', $historyId)->update([
+            DB::connection('mysql')->table('web_stack_history')->where('id', $historyId)->update([
                 'status' => 'success',
                 'updated_at' => now(),
             ]);
@@ -260,7 +260,7 @@ class WebStackService
             Log::error("Stack switch failed: " . $e->getMessage());
             $this->rollbackStack();
 
-            DB::connection('sqlite')->table('web_stack_history')->where('id', $historyId)->update([
+            DB::connection('mysql')->table('web_stack_history')->where('id', $historyId)->update([
                 'status' => 'error',
                 'validation_output' => $e->getMessage(),
                 'updated_at' => now(),
@@ -287,7 +287,7 @@ class WebStackService
             $this->restoreConfig($backupDir);
             $this->startStackServices($settings->previous_stack);
 
-            DB::connection('sqlite')->table('web_stack_settings')->where('id', 1)->update([
+            DB::connection('mysql')->table('web_stack_settings')->where('id', 1)->update([
                 'active_stack' => $settings->previous_stack,
                 'previous_stack' => $settings->active_stack,
                 'last_switch_at' => now(),
@@ -382,7 +382,7 @@ class WebStackService
 
     public function getSwitchHistory(int $limit = 20): array
     {
-        return DB::connection('sqlite')->table('web_stack_history')
+        return DB::connection('mysql')->table('web_stack_history')
             ->orderByDesc('created_at')
             ->limit($limit)
             ->get()
@@ -737,9 +737,9 @@ VCL;
 
     public function initializeSettings(): void
     {
-        $exists = DB::connection('sqlite')->table('web_stack_settings')->where('id', 1)->exists();
+        $exists = DB::connection('mysql')->table('web_stack_settings')->where('id', 1)->exists();
         if (!$exists) {
-            DB::connection('sqlite')->table('web_stack_settings')->insert([
+            DB::connection('mysql')->table('web_stack_settings')->insert([
                 'id' => 1,
                 'active_stack' => 'nginx_phpfpm',
                 'previous_stack' => null,

@@ -9,7 +9,6 @@ use App\Services\ShellService;
 
 class AccountService
 {
-    protected string $panelDb = '/usr/local/openpanel/database/database.sqlite';
     protected string $homeBase = '/home';
     protected string $nginxVhostDir = '/etc/nginx/conf.d/users';
     protected string $phpFpmPoolDir = '/etc/php-fpm.d/users';
@@ -121,7 +120,7 @@ class AccountService
     {
         $tmpFile = tempnam(sys_get_temp_dir(), 'pw');
         file_put_contents($tmpFile, "{$username}:{$newPassword}\n");
-        $result = Process::run("/usr/sbin/chpasswd < " . escapeshellarg($tmpFile));
+        $result = Process::run("sudo /usr/sbin/chpasswd < " . escapeshellarg($tmpFile));
         @unlink($tmpFile);
         if ($result->failed()) {
             throw new \RuntimeException("Failed to change password: " . ($result->errorOutput() ?: $result->output()));
@@ -138,11 +137,7 @@ class AccountService
 
     public function getUser(string $username): ?array
     {
-        $dbPath = $this->panelDb;
-        if (!file_exists($dbPath)) {
-            return null;
-        }
-        $row = DB::connection('sqlite')->table('accounts')->where('username', $username)->first();
+        $row = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
         return $row ? (array) $row : null;
     }
 
@@ -181,15 +176,15 @@ class AccountService
     {
         $home = "{$this->homeBase}/{$username}";
 
-        $result = Process::run("/usr/sbin/useradd -m -d {$home} -s /bin/bash {$username} 2>&1");
+        $result = Process::run("sudo /usr/sbin/useradd -m -d {$home} -s /bin/bash {$username} 2>&1");
 
         if ($result->failed()) {
             throw new \RuntimeException("Failed to create system user: " . ($result->errorOutput() ?: $result->output()));
         }
 
-        $result = Process::run("/usr/bin/echo '{$username}:{$password}' | /usr/sbin/chpasswd 2>&1");
+        $result = Process::run("echo '{$password}' | sudo /usr/bin/passwd --stdin {$username} 2>&1");
         if ($result->failed()) {
-            Process::run("/usr/sbin/userdel -r {$username}");
+            Process::run("sudo /usr/sbin/userdel -r {$username}");
             throw new \RuntimeException("Failed to set password: " . ($result->errorOutput() ?: $result->output()));
         }
 
@@ -448,12 +443,7 @@ FPM;
         int $disk,
         int $bandwidth
     ): void {
-        $dbPath = $this->panelDb;
-        if (!file_exists($dbPath)) {
-            return;
-        }
-
-        DB::connection('sqlite')->table('accounts')->insert([
+        DB::connection('mysql')->table('accounts')->insert([
             'username' => $username,
             'domain' => $domain,
             'ip_address' => $ip,
@@ -470,20 +460,12 @@ FPM;
 
     protected function removeFromDatabase(string $username): void
     {
-        $dbPath = $this->panelDb;
-        if (!file_exists($dbPath)) {
-            return;
-        }
-        DB::connection('sqlite')->table('accounts')->where('username', $username)->delete();
+        DB::connection('mysql')->table('accounts')->where('username', $username)->delete();
     }
 
     protected function updateDatabaseField(string $username, string $field, $value): void
     {
-        $dbPath = $this->panelDb;
-        if (!file_exists($dbPath)) {
-            return;
-        }
-        DB::connection('sqlite')->table('accounts')->where('username', $username)->update([
+        DB::connection('mysql')->table('accounts')->where('username', $username)->update([
             $field => $value,
             'updated_at' => now(),
         ]);
