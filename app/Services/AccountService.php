@@ -2,47 +2,152 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Process;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
+use App\Models\Account;
+use App\Models\Domain;
+use App\Models\Package;
+use App\Models\Setting;
 use App\Services\ShellService;
 use App\Services\ResourceControlService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Process;
 
 class AccountService
 {
     protected string $homeBase = '/home';
+    protected string $dnsZoneDir = '/var/named';
     protected string $nginxVhostDir = '/etc/nginx/conf.d/users';
     protected string $phpFpmPoolDir = '/etc/php-fpm.d/users';
-    protected string $dnsZoneDir = '/var/named';
-    protected WebStackService $stackService;
 
-    public function __construct(?WebStackService $stackService = null)
+    // =========================================================================
+    // LIST / GET
+    // =========================================================================
+
+    public function listUsers(): array
     {
-        $this->stackService = $stackService ?? new WebStackService();
+        $users = [];
+        $result = Process::run("getent passwd");
+        if ($result->successful()) {
+            foreach (explode("\n", trim($result->output())) as $line) {
+                $parts = explode(':', $line);
+                if (count($parts) >= 6 && str_starts_with($parts[5], $this->homeBase . '/')) {
+                    $users[] = [
+                        'username' => $parts[0],
+                        'uid' => (int) $parts[2],
+                        'gid' => (int) $parts[3],
+                        'home' => $parts[5],
+                        'shell' => $parts[6],
+                    ];
+                }
+            }
+        }
+        return $users;
     }
+
+    public function getUser(string $username): ?array
+    {
+        $result = Process::run("getent passwd " . escapeshellarg($username));
+        if ($result->failed()) return null;
+
+        $parts = explode(':', $result->output());
+        if (count($parts) < 6) return null;
+
+        $user = [
+            'username' => $parts[0],
+            'uid' => (int) $parts[2],
+            'gid' => (int) $parts[3],
+            'home' => $parts[5],
+            'shell' => $parts[6],
+        ];
+
+        // Check if account exists in database
+        $dbUser = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+        if ($dbUser) {
+            $user['domain'] = $dbUser->domain;
+            $user['email'] = $dbUser->email;
+            $user['package'] = $dbUser->package;
+            $user['disk_limit'] = $dbUser->disk_limit;
+            $user['bandwidth_limit'] = $dbUser->bandwidth_limit;
+            $user['suspended'] = (bool) $dbUser->suspended;
+            $user['created_at'] = $dbUser->created_at;
+        }
+
+        // Get disk usage
+        $du = Process::run("du -sm " . escapeshellarg($user['home']) . " 2>/dev/null | awk '{print $1}'");
+        $user['disk_usage_mb'] = $du->successful() ? (int) trim($du->output()) : 0;
+
+        return $user;
+    }
+
+    public function getUserStats(string $username): array
+    {
+        $user = $this->getUser($username);
+        if (!$user) return [];
+
+        $stats = [
+            'disk_usage_mb' => $user['disk_usage_mb'],
+            'disk_limit_mb' => $user['disk_limit'] ?? 0,
+            'bandwidth_limit_mb' => $user['bandwidth_limit'] ?? 0,
+        ];
+
+        // Process count
+        $ps = Process::run("ps -u " . escapeshellarg($username) . " --no-headers 2>/dev/null | wc -l");
+        $stats['process_count'] = $ps->successful() ? (int) trim($ps->output()) : 0;
+
+        // Database count
+        $dbCount = DB::connection('mysql')->table('mysql.db')
+            ->where('User', $username)
+            ->count();
+        $stats['database_count'] = $dbCount;
+
+        return $stats;
+    }
+
+    public function getAccountLimits(string $username): array
+    {
+        $dbUser = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+        if (!$dbUser) return [];
+
+        $package = Package::where('name', $dbUser->package)->first();
+        if (!$package) return [];
+
+        return $package->toArray();
+    }
+
+    // =========================================================================
+    // CREATE
+    // =========================================================================
 
     public function create(array $data): array
     {
-        $this->validateInput($data);
+        $this->validateCreateData($data);
 
-        $username = strtolower($data['username']);
-        $domain = strtolower($data['domain']);
+        $username = $data['username'];
+        $domain = $data['domain'];
         $password = $data['password'];
-        $ip = $data['ip'] ?? $this->getServerIp();
+        $ip = $data['ip'] ?? $this->getDefaultIp();
         $email = $data['email'] ?? "admin@{$domain}";
         $package = $data['package'] ?? 'default';
-        $disk = $data['disk_limit'] ?? 1000;
-        $bandwidth = $data['bandwidth_limit'] ?? 1000;
+        $disk = $data['disk_limit'] ?? 1024;
+        $bandwidth = $data['bandwidth_limit'] ?? 10240;
 
-        if ($this->userExists($username)) {
-            throw new \RuntimeException("User '{$username}' already exists on this server.");
+        $home = "{$this->homeBase}/{$username}";
+
+        // Check if user already exists
+        if ($this->getUser($username)) {
+            throw new \RuntimeException("Account '{$username}' already exists.");
         }
 
-        $this->createSystemUser($username, $password, $domain);
+        // Create system user
+        $this->createSystemUser($username, $password, $home);
+
+        // Create home directory structure
         $this->createHomeStructure($username, $domain);
+
+        // Create DNS zone
         $this->createDnsZone($username, $domain, $ip);
-        $activeStack = $this->stackService->getActiveStack();
-        $home = "{$this->homeBase}/{$username}";
+
+        // Generate web server vhost and reload
+        $activeStack = WebStackService::getActiveStack();
         $this->stackService->generateVhostForDomain($activeStack, $username, $domain, $home);
         // Re-apply group membership now that stack is fully configured
         $this->addWebServerToGroup($username);
@@ -54,6 +159,7 @@ class AccountService
         // Apply resource limits from package (cgroups, nproc, disk quotas)
         // Wrapped in try-catch — resource limits are best-effort, don't block account creation
         try { ResourceControlService::applyForUser($username, $package); } catch (\Throwable $e) {}
+
         $this->reloadServices();
 
         return [
@@ -61,73 +167,84 @@ class AccountService
             'username' => $username,
             'domain' => $domain,
             'ip' => $ip,
-            'home' => "{$this->homeBase}/{$username}",
+            'home' => $home,
             'message' => "Account '{$username}' created successfully.",
         ];
     }
 
-    public function delete(string $username): array
+    // =========================================================================
+    // TERMINATE
+    // =========================================================================
+
+    public function terminate(string $username, bool $keepDns = false): array
     {
         $user = $this->getUser($username);
         if (!$user) {
-            throw new \RuntimeException("User '{$username}' not found.");
-        }
-
-        $this->removeFtpUser($username);
-        $this->removePhpFpmPool($username);
-        $activeStack = $this->stackService->getActiveStack();
-        $this->stackService->removeVhostForDomain($activeStack, $username, $user['domain']);
-        $this->removeDnsZone($username, $user['domain']);
-        $this->removeEmailDomain($user['domain']);
-        ResourceControlService::removeFromUser($username);
-        $this->removeSystemUser($username);
-        $this->removeFromDatabase($username);
-        $this->reloadServices();
-
-        return [
-            'success' => true,
-            'message' => "Account '{$username}' deleted.",
-        ];
-    }
-
-    public function suspend(string $username): array
-    {
-        $user = $this->getUser($username);
-        if (!$user) {
-            throw new \RuntimeException("User '{$username}' not found.");
+            throw new \RuntimeException("Account '{$username}' not found.");
         }
 
         $domain = $user['domain'] ?? '';
 
-        // 1. Lock OS account
-        Process::run("passwd -l {$username}");
-        Process::run("chage -E 0 {$username}");
-
-        // 2. Update DB status
-        $this->updateDatabaseField($username, 'status', 'suspended');
-
-        // 3. Stack-aware suspension: 403 vhost + Varnish ban
-        $stackResult = $this->stackService->suspendDomain($username, $domain);
-
-        // 4. WordPress Varnish purge if applicable
-        $wpPurgeResult = null;
-        try {
-            $site = DB::connection('mysql')->table('wordpress_sites')
-                ->where('domain', $domain)->first();
-            if ($site) {
-                $this->stackService->purgeVarnishCache($domain);
-                $wpPurgeResult = 'purged';
-            }
-        } catch (\Throwable $e) {
-            $wpPurgeResult = 'skipped: ' . $e->getMessage();
+        $this->removePhpFpmPool($username);
+        $this->stackService->removeVhostForDomain(
+            WebStackService::getActiveStack(),
+            $username,
+            $domain
+        );
+        if (!$keepDns && $domain) {
+            $this->removeDnsZone($username, $domain);
         }
+        $this->removeEmailDomain($domain);
+        ResourceControlService::removeFromUser($username);
+        $this->removeSystemUser($username);
+
+        DB::connection('mysql')->table('accounts')->where('username', $username)->delete();
+
+        $this->reloadServices();
 
         return [
             'success' => true,
+            'username' => $username,
+            'message' => "Account '{$username}' terminated successfully.",
+        ];
+    }
+
+    // =========================================================================
+    // SUSPEND / UNSUSPEND
+    // =========================================================================
+
+    public function suspend(string $username, string $reason = ''): array
+    {
+        $user = $this->getUser($username);
+        if (!$user) {
+            throw new \RuntimeException("Account '{$username}' not found.");
+        }
+
+        $domain = $user['domain'] ?? '';
+
+        // Lock the OS account
+        Process::run("sudo passwd -l " . escapeshellarg($username) . " 2>/dev/null");
+        Process::run("sudo chage -E 0 " . escapeshellarg($username) . " 2>/dev/null");
+
+        // Write suspended vhosts (nginx 403 + Varnish ban + Apache 403)
+        $stack = WebStackService::getActiveStack();
+        $suspendResult = $this->stackService->suspendDomain($stack, $username, $domain);
+
+        DB::connection('mysql')->table('accounts')
+            ->where('username', $username)
+            ->update([
+                'suspended' => true,
+                'suspended_at' => now(),
+                'suspension_reason' => $reason,
+            ]);
+
+        $this->reloadServices();
+
+        return [
+            'success' => true,
+            'username' => $username,
             'message' => "Account '{$username}' suspended.",
-            'domain' => $domain,
-            'stack_actions' => $stackResult['actions'] ?? [],
-            'varnish_purge' => $wpPurgeResult,
+            'actions' => $suspendResult['actions'] ?? [],
         ];
     }
 
@@ -135,72 +252,108 @@ class AccountService
     {
         $user = $this->getUser($username);
         if (!$user) {
-            throw new \RuntimeException("User '{$username}' not found.");
+            throw new \RuntimeException("Account '{$username}' not found.");
         }
 
         $domain = $user['domain'] ?? '';
 
-        // 1. Unlock OS account
-        Process::run("passwd -u {$username}");
-        Process::run("chage -E -1 {$username}");
+        // Unlock the OS account
+        Process::run("sudo passwd -u " . escapeshellarg($username) . " 2>/dev/null");
+        Process::run("sudo chage -E -1 " . escapeshellarg($username) . " 2>/dev/null");
 
-        // 2. Update DB status
-        $this->updateDatabaseField($username, 'status', 'active');
+        // Remove suspended vhosts and restore normal vhosts
+        $stack = WebStackService::getActiveStack();
+        $unsuspendResult = $this->stackService->unsuspendDomain($stack, $username, $domain);
 
-        // 3. Stack-aware unsuspend: restore vhost + Varnish purge
-        $stackResult = $this->stackService->unsuspendDomain($username, $domain);
+        DB::connection('mysql')->table('accounts')
+            ->where('username', $username)
+            ->update([
+                'suspended' => false,
+                'suspended_at' => null,
+                'suspension_reason' => null,
+            ]);
+
+        $this->reloadServices();
 
         return [
             'success' => true,
+            'username' => $username,
             'message' => "Account '{$username}' unsuspended.",
-            'domain' => $domain,
-            'stack_actions' => $stackResult['actions'] ?? [],
+            'actions' => $unsuspendResult['actions'] ?? [],
         ];
     }
 
+    // =========================================================================
+    // CHANGE PACKAGE
+    // =========================================================================
+
+    public function changePackage(string $username, string $newPackage): array
+    {
+        $user = $this->getUser($username);
+        if (!$user) {
+            throw new \RuntimeException("Account '{$username}' not found.");
+        }
+
+        $pkg = Package::where('name', $newPackage)->first();
+        if (!$pkg) {
+            throw new \RuntimeException("Package '{$newPackage}' not found.");
+        }
+
+        DB::connection('mysql')->table('accounts')
+            ->where('username', $username)
+            ->update([
+                'package' => $newPackage,
+                'disk_limit' => $pkg->disk_space_mb,
+                'bandwidth_limit' => $pkg->bandwidth_mb,
+                'updated_at' => now(),
+            ]);
+
+        // Re-apply resource limits for the new package
+        try { ResourceControlService::applyForUser($username, $newPackage); } catch (\Throwable $e) {}
+
+        return [
+            'success' => true,
+            'username' => $username,
+            'package' => $newPackage,
+            'message' => "Package changed to '{$newPackage}'.",
+        ];
+    }
+
+    // =========================================================================
+    // CHANGE PASSWORD
+    // =========================================================================
+
     public function changePassword(string $username, string $newPassword): array
     {
-        $tmpFile = tempnam(sys_get_temp_dir(), 'pw');
-        file_put_contents($tmpFile, "{$username}:{$newPassword}\n");
-        $result = Process::run("sudo /usr/sbin/chpasswd < " . escapeshellarg($tmpFile));
-        @unlink($tmpFile);
-        if ($result->failed()) {
-            throw new \RuntimeException("Failed to change password: " . ($result->errorOutput() ?: $result->output()));
+        $user = $this->getUser($username);
+        if (!$user) {
+            throw new \RuntimeException("Account '{$username}' not found.");
         }
-        return ['success' => true, 'message' => "Password changed for '{$username}'."];
+
+        $result = Process::run("echo " . escapeshellarg($newPassword) . " | sudo /usr/bin/passwd --stdin " . escapeshellarg($username) . " 2>&1");
+        if ($result->failed()) {
+            throw new \RuntimeException("Failed to change password: " . $result->errorOutput());
+        }
+
+        return [
+            'success' => true,
+            'username' => $username,
+            'message' => "Password changed successfully.",
+        ];
     }
 
-    public function listUsers(): array
-    {
-        $result = Process::run("awk -F: '(\$3 >= 1000 && \$3 < 65534) || \$3 == 0 {print \$1}' /etc/passwd");
-        $users = array_filter(explode("\n", trim($result->output())));
-        return array_values($users);
-    }
+    // =========================================================================
+    // REPAIR ISOLATION
+    // =========================================================================
 
-    public function getUser(string $username): ?array
-    {
-        $row = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
-        return $row ? (array) $row : null;
-    }
-
-    public function getServerIp(): string
-    {
-        $result = Process::run("hostname -I | awk '{print $1}'");
-        return trim($result->output()) ?: '127.0.0.1';
-    }
-
-    /**
-     * Repair filesystem isolation for a user account.
-     * Fixes ownership, permissions, missing dirs, and dangerous configurations.
-     */
     public function repairUserIsolation(string $username): array
     {
         $user = $this->getUser($username);
         if (!$user) {
-            throw new \RuntimeException("User '{$username}' not found.");
+            throw new \RuntimeException("Account '{$username}' not found.");
         }
 
-        $home = "{$this->homeBase}/{$username}";
+        $home = $user['home'];
         $result = ['username' => $username, 'actions' => [], 'success' => true];
 
         if (!is_dir($home)) {
@@ -210,101 +363,90 @@ class AccountService
         }
 
         // 1. Fix home directory ownership
-        Process::run("chown {$username}:{$username} {$home}");
+        Process::run("sudo chown {$username}:{$username} " . escapeshellarg($home));
         $result['actions'][] = 'home_ownership_fixed';
 
         // 2. Fix home directory permissions (711 = traverse only)
-        Process::run("chmod 711 {$home}");
+        Process::run("sudo chmod 711 " . escapeshellarg($home));
         $result['actions'][] = 'home_perms_711';
 
-        // 3. Ensure required directories exist
+        // 3. Ensure required directories exist with correct permissions
         $requiredDirs = [
-            'public_html', 'public_html/cgi-bin', 'public_html/uploads',
-            '.ssh', 'logs', 'logs/nginx', 'logs/apache',
-            'tmp', 'mail', 'backups', 'private', '.openpanel',
+            'public_html' => '750',
+            'private' => '700',
+            'backups' => '700',
+            '.openpanel' => '700',
+            'tmp' => '700',
+            'logs' => '700',
+            'logs/nginx' => '700',
+            'logs/apache' => '700',
+            '.ssh' => '700',
+            'mail' => '700',
         ];
-        foreach ($requiredDirs as $dir) {
+        foreach ($requiredDirs as $dir => $perm) {
             $fullPath = "{$home}/{$dir}";
             if (!is_dir($fullPath)) {
-                Process::run("sudo -u {$username} mkdir -p " . escapeshellarg($fullPath));
+                Process::run("sudo mkdir -p " . escapeshellarg($fullPath));
                 $result['actions'][] = "created_{$dir}";
             }
+            Process::run("sudo chmod {$perm} " . escapeshellarg($fullPath));
         }
 
-        // 4. Fix directory permissions
-        $perms = [
-            'public_html' => '750',
-            '.ssh' => '700',
-            'logs' => '700',
-            'tmp' => '700',
-            'backups' => '700',
-            'private' => '700',
-            '.openpanel' => '700',
-        ];
-        foreach ($perms as $dir => $perm) {
-            $fullPath = "{$home}/{$dir}";
-            if (is_dir($fullPath)) {
-                Process::run("chmod {$perm} " . escapeshellarg($fullPath));
-            }
-        }
-        $result['actions'][] = 'directory_perms_fixed';
-
-        // 5. Fix ownership of all user files
-        Process::run("chown -R {$username}:{$username} {$home}");
+        // 4. Fix ownership of all user files recursively
+        Process::run("sudo chown -R {$username}:{$username} " . escapeshellarg($home));
         $result['actions'][] = 'ownership_recursion_fixed';
 
-        // 6. Remove world-writable files in home (security risk)
-        Process::run("find {$home} -type f -perm -0002 -exec chmod o-w {} + 2>/dev/null");
-        Process::run("find {$home} -type d -perm -0002 -not -path '*/tmp' -exec chmod o-w {} + 2>/dev/null");
-        $result['actions'][] = 'world_writable_removed';
+        // 5. Remove world-writable files in home
+        $ww = Process::run("sudo find " . escapeshellarg($home) . " -type f -perm -0002 -print 2>/dev/null");
+        if ($ww->successful() && trim($ww->output())) {
+            foreach (explode("\n", trim($ww->output())) as $f) {
+                if ($f) Process::run("sudo chmod o-w " . escapeshellarg($f));
+            }
+            $result['actions'][] = 'world_writable_fixed';
+        }
 
-        // 7. Remove symlinks pointing outside home (symlink attack defense)
-        $symlinkResult = Process::run("find {$home} -type l ! -exec test -e {} \\; -delete 2>/dev/null");
-        Process::run("find {$home} -type l -exec readlink -f {} \\; 2>/dev/null | while read target; do
-            case \"\$target\" in
-                {$home}*) ;; # OK — points inside home
-                *) find {$home} -type l -lname \"*\$(basename \$target)*\" -delete 2>/dev/null ;;
-            esac
-done");
+        // 6. Remove dangerous symlinks pointing outside home
+        $symlinks = Process::run("sudo find " . escapeshellarg($home) . " -type l 2>/dev/null");
+        if ($symlinks->successful()) {
+            foreach (explode("\n", trim($symlinks->output())) as $link) {
+                if (!$link) continue;
+                $target = Process::run("sudo readlink -f " . escapeshellarg($link));
+                if ($target->successful() && !str_starts_with(trim($target->output()), $home)) {
+                    Process::run("sudo rm -f " . escapeshellarg($link));
+                    $result['actions'][] = "removed_symlink_{$link}";
+                }
+            }
+        }
         $result['actions'][] = 'dangerous_symlinks_removed';
 
-        // 8. Ensure web servers are in user's group (fixes 403 on public_html 750)
+        // 7. Ensure web servers are in user's group (fixes 403 on public_html 750)
         $this->addWebServerToGroup($username);
         $result['actions'][] = 'web_server_group_fixed';
 
-        // 9. Fix PHP-FPM pool if missing or misconfigured
-        $poolPath = "{$this->phpFpmPoolDir}/{$username}.conf";
-        if (!file_exists($poolPath)) {
+        // 8. Fix PHP-FPM pool if missing or misconfigured
+        $poolFile = "{$this->phpFpmPoolDir}/{$username}.conf";
+        if (!file_exists($poolFile)) {
             $this->createPhpFpmPool($username);
             $result['actions'][] = 'php_fpm_pool_created';
         } else {
-            // Validate pool has security directives
-            $poolContent = file_get_contents($poolPath);
-            $needsUpdate = false;
-            if (strpos($poolContent, 'disable_functions') === false) {
-                $needsUpdate = true;
-            }
-            if (strpos($poolContent, 'open_basedir') === false) {
-                $needsUpdate = true;
-            }
-            if ($needsUpdate) {
+            // Validate pool config
+            $check = Process::run("sudo php-fpm -t 2>&1");
+            if ($check->failed()) {
                 $this->createPhpFpmPool($username);
-                $result['actions'][] = 'php_fpm_pool_hardened';
+                $result['actions'][] = 'php_fpm_pool_recreated';
             }
         }
 
-        // 10. Reload PHP-FPM if pool was modified
+        // 9. Reload PHP-FPM if pool was modified
         if (in_array('php_fpm_pool_created', $result['actions']) ||
-            in_array('php_fpm_pool_hardened', $result['actions'])) {
-            Process::run("systemctl reload php-fpm 2>/dev/null");
-            $result['actions'][] = 'php_fpm_reloaded';
+            in_array('php_fpm_pool_recreated', $result['actions'])) {
+            Process::run("sudo systemctl reload php-fpm 2>/dev/null");
         }
 
-        // 11. Fix .htaccess if missing
+        // 10. Fix .htaccess if missing
         $htaccessPath = "{$home}/public_html/.htaccess";
-        if (!file_exists($htaccessPath)) {
+        if (!file_exists($htaccessPath) && is_dir("{$home}/public_html")) {
             $domain = $user['domain'] ?? $username;
-            // Re-create home structure elements
             $this->createHomeStructure($username, $domain);
             $result['actions'][] = 'htaccess_restored';
         }
@@ -312,56 +454,31 @@ done");
         return $result;
     }
 
-    protected function validateInput(array $data): void
-    {
-        if (empty($data['username'])) {
-            throw new \RuntimeException("Username is required.");
-        }
-        if (empty($data['domain'])) {
-            throw new \RuntimeException("Domain is required.");
-        }
-        if (empty($data['password'])) {
-            throw new \RuntimeException("Password is required.");
-        }
-        if (strlen($data['username']) < 2 || strlen($data['username']) > 32) {
-            throw new \RuntimeException("Username must be 2-32 characters.");
-        }
-        if (!preg_match('/^[a-z][a-z0-9_]*$/', $data['username'])) {
-            throw new \RuntimeException("Username must start with a letter and contain only lowercase letters, numbers, underscores.");
-        }
-    }
+    // =========================================================================
+    // SYSTEM USER OPERATIONS
+    // =========================================================================
 
-    protected function userExists(string $username): bool
+    protected function createSystemUser(string $username, string $password, string $home): void
     {
-        $result = Process::run("id {$username} 2>/dev/null");
-        return $result->successful();
-    }
-
-    protected function createSystemUser(string $username, string $password, string $domain): void
-    {
-        $home = "{$this->homeBase}/{$username}";
-
-        // Use nologin shell by default — shell access is admin-controlled via package
+        // Determine shell: allow override from package data
         $shell = '/sbin/nologin';
-        $result = Process::run("sudo /usr/sbin/useradd -m -d {$home} -s {$shell} {$username} 2>&1");
 
+        // Create system user
+        $result = Process::run("sudo /usr/sbin/useradd -m -d " . escapeshellarg($home) . " -s " . escapeshellarg($shell) . " " . escapeshellarg($username) . " 2>&1");
         if ($result->failed()) {
-            throw new \RuntimeException("Failed to create system user: " . ($result->errorOutput() ?: $result->output()));
+            throw new \RuntimeException("Failed to create user: " . $result->output());
         }
 
-        // Add web servers to user's group so they can read public_html (750)
-        // nginx always present; apache only on varnish stack
-        $this->addWebServerToGroup($username);
-
-        $result = Process::run("echo '{$password}' | sudo /usr/bin/passwd --stdin {$username} 2>&1");
+        // Set password
+        $result = Process::run("echo " . escapeshellarg($password) . " | sudo /usr/bin/passwd --stdin " . escapeshellarg($username) . " 2>&1");
         if ($result->failed()) {
-            Process::run("sudo /usr/sbin/userdel -r {$username}");
+            Process::run("sudo /usr/sbin/userdel -r " . escapeshellarg($username));
             throw new \RuntimeException("Failed to set password: " . ($result->errorOutput() ?: $result->output()));
         }
 
-        Process::run("/usr/bin/chown {$username}:{$username} {$home}");
+        Process::run("sudo /usr/bin/chown {$username}:{$username} " . escapeshellarg($home));
         // Set home to 711 immediately so runAsUser can cd into it later
-        Process::run("/usr/bin/chmod 711 {$home}");
+        Process::run("sudo /usr/bin/chmod 711 " . escapeshellarg($home));
     }
 
     /**
@@ -382,28 +499,20 @@ done");
 
     protected function removeSystemUser(string $username): void
     {
-        Process::run("userdel -r {$username} 2>/dev/null");
+        Process::run("sudo userdel -r " . escapeshellarg($username) . " 2>/dev/null");
     }
 
     protected function createHomeStructure(string $username, string $domain): void
     {
         $home = "{$this->homeBase}/{$username}";
 
-        // Create directories as user
-        $dirs = implode(' ', [
-            'public_html',
-            'public_html/cgi-bin',
-            '.ssh',
-            'logs',
-            'logs/nginx',
-            'logs/apache',
-            'tmp',
-            'mail',
-            'backups',
-            'private',
-            '.openpanel',
-        ]);
-        ShellService::runAsUser($username, "mkdir -p {$dirs}", 30, $home);
+        // Create directories using sudo (API runs as nginx, not root)
+        $dirs = [
+            'public_html', 'public_html/cgi-bin', '.ssh',
+            'logs', 'logs/nginx', 'logs/apache',
+            'tmp', 'mail', 'backups', 'private', '.openpanel',
+        ];
+        Process::run("sudo mkdir -p " . implode(' ', array_map(fn($d) => escapeshellarg("{$home}/{$d}"), $dirs)));
 
         // Write index.html via temp file
         $index = <<<HTML
@@ -419,8 +528,7 @@ HTML;
 
         $tmpIndex = tempnam(sys_get_temp_dir(), 'idx');
         file_put_contents($tmpIndex, $index);
-        chmod($tmpIndex, 0644);
-        ShellService::runAsUser($username, "cp " . escapeshellarg($tmpIndex) . " public_html/index.html", 10, $home);
+        Process::run("sudo cp " . escapeshellarg($tmpIndex) . " " . escapeshellarg("{$home}/public_html/index.html"));
         @unlink($tmpIndex);
 
         // Write .htaccess ONLY if missing — preserves CMS rules (WordPress, etc.)
@@ -462,24 +570,33 @@ HTACCESS;
 
             $tmpHt = tempnam(sys_get_temp_dir(), 'ht');
             file_put_contents($tmpHt, $htaccess);
-            chmod($tmpHt, 0644);
-            ShellService::runAsUser($username, "cp " . escapeshellarg($tmpHt) . " public_html/.htaccess", 10, $home);
+            Process::run("sudo cp " . escapeshellarg($tmpHt) . " " . escapeshellarg("{$home}/public_html/.htaccess"));
             @unlink($tmpHt);
         }
 
-        // Set permissions: home=711, public_html=750, private dirs=700, tmp=1777
-        ShellService::runAsUser($username, implode(' && ', [
-            'chmod 711 .',                    // home: owner=rwx, group=execute-only (traverse), other=execute-only
-            'chmod 750 public_html',           // web-readable but not world-readable
-            'chmod 700 .ssh',                  // SSH keys private
-            'chmod 700 private',               // private files owner-only
-            'chmod 700 backups',               // backups owner-only
-            'chmod 700 .openpanel',            // config owner-only
-            'chmod 700 tmp',                   // temp files owner-only (not world-writable)
-            'chmod 700 logs',                  // logs owner-only
-            'chmod 1777 public_html/cgi-bin',  // CGI tmp (sticky)
-        ]), 10, $home);
+        // Set ownership and permissions using sudo
+        Process::run("sudo chown -R {$username}:{$username} " . escapeshellarg($home));
+
+        $perms = [
+            '.' => '711',
+            'public_html' => '750',
+            'public_html/cgi-bin' => '1777',
+            '.ssh' => '700',
+            'logs' => '700',
+            'tmp' => '700',
+            'mail' => '700',
+            'backups' => '700',
+            'private' => '700',
+            '.openpanel' => '700',
+        ];
+        foreach ($perms as $path => $perm) {
+            Process::run("sudo chmod {$perm} " . escapeshellarg("{$home}/{$path}"));
+        }
     }
+
+    // =========================================================================
+    // DNS
+    // =========================================================================
 
     protected function createDnsZone(string $username, string $domain, string $ip): void
     {
@@ -489,91 +606,83 @@ HTACCESS;
         $zone = <<<BIND
 \$TTL 14400
 @   IN  SOA ns1.{$domain}. admin.{$domain}. (
-        {$serial}
-        3600
-        1800
-        1209600
-        86400
-)
+        {$serial}  ; serial
+        3600       ; refresh
+        1800       ; retry
+        1209600    ; expire
+        86400 )    ; minimum
 
-@       IN  NS      ns1.{$domain}.
-@       IN  NS      ns2.{$domain}.
-@       IN  A       {$ip}
-ns1     IN  A       {$ip}
-ns2     IN  A       {$ip}
-www     IN  A       {$ip}
-mail    IN  A       {$ip}
-ftp     IN  A       {$ip}
-@       IN  MX  10  mail.{$domain}.
-@       IN  TXT     "v=spf1 +a +mx +ip4:{$ip} ~all"
+    IN  NS  ns1.{$domain}.
+    IN  NS  ns2.{$domain}.
+    IN  A   {$ip}
+
+ns1 IN  A   {$ip}
+ns2 IN  A   {$ip}
+www IN  A   {$ip}
+@   IN  A   {$ip}
 BIND;
 
         $tmp = tempnam(sys_get_temp_dir(), 'dns');
         file_put_contents($tmp, $zone);
-        Process::run("sudo cp " . escapeshellarg($tmp) . " {$zoneFile}");
-        Process::run("sudo chown named:named {$zoneFile}");
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($zoneFile));
+        Process::run("sudo chown named:named " . escapeshellarg($zoneFile));
         @unlink($tmp);
     }
 
     protected function removeDnsZone(string $username, string $domain): void
     {
         $zoneFile = "{$this->dnsZoneDir}/{$domain}.db";
-        Process::run("sudo rm -f {$zoneFile}");
+        Process::run("sudo rm -f " . escapeshellarg($zoneFile));
     }
 
-    protected function createNginxVhost(string $username, string $domain): void
-    {
-        $home = "{$this->homeBase}/{$username}";
-        $stack = $this->stackService->getCurrentStack();
-        $this->stackService->generateVhostForDomain($stack, $username, $domain, $home);
-    }
+    // =========================================================================
+    // NGINX VHOST
+    // =========================================================================
 
     protected function removeNginxVhost(string $username): void
     {
-        Process::run("sudo rm -f {$this->nginxVhostDir}/{$username}.conf");
+        Process::run("sudo rm -f " . escapeshellarg("{$this->nginxVhostDir}/{$username}.conf"));
     }
+
+    // =========================================================================
+    // PHP-FPM POOL
+    // =========================================================================
 
     protected function createPhpFpmPool(string $username): void
     {
         $home = "{$this->homeBase}/{$username}";
-
-        $pool = <<<FPM
+        $pool = <<<CONF
 [{$username}]
 user = {$username}
 group = {$username}
-listen = /run/openpanel-php-user-{$username}.sock
+listen = /run/php-fpm-{$username}.sock
 listen.owner = nginx
 listen.group = nginx
 listen.mode = 0660
 
 pm = ondemand
-pm.max_children = 10
-pm.process_idle_timeout = 60s
+pm.max_children = 5
+pm.process_idle_timeout = 300s
 pm.max_requests = 500
 
-; Isolation: open_basedir restricted to user home + per-user tmp
-php_admin_value[open_basedir] = {$home}:/tmp
+php_admin_value[error_log] = {$home}/logs/php-error.log
+php_admin_flag[log_errors] = on
+php_admin_value[memory_limit] = 128M
+php_admin_value[upload_max_filesize] = 64M
+php_admin_value[post_max_size] = 64M
+php_admin_value[max_execution_time] = 300
+php_admin_value[max_input_time] = 120
+php_admin_value[max_file_uploads] = 20
+
+; Security isolation
+php_admin_value[open_basedir] = {$home}:/tmp:/usr/share/php
+php_admin_value[disable_functions] = passthru,system,dl,putenv,pcntl_exec,proc_nice,proc_terminate,proc_close,show_source
+php_admin_flag[expose_php] = off
 php_admin_value[session.save_path] = {$home}/tmp
 php_admin_value[upload_tmp_dir] = {$home}/tmp
 php_admin_value[sys_temp_dir] = {$home}/tmp
-
-; Logging
-php_admin_value[error_log] = {$home}/logs/php-error.log
-php_admin_flag[log_errors] = on
 php_admin_flag[display_errors] = off
-
-; Security
-php_admin_flag[expose_php] = off
-php_admin_value[disable_functions] = passthru,system,dl,putenv,pcntl_exec,proc_nice,proc_terminate,proc_close,show_source
-
-; Resource limits
-php_value[memory_limit] = 256M
-php_value[max_execution_time] = 60
-php_value[max_input_time] = 120
-php_value[upload_max_filesize] = 64M
-php_value[post_max_size] = 64M
-php_value[max_file_uploads] = 20
-FPM;
+CONF;
 
         Process::run("sudo mkdir -p {$this->phpFpmPoolDir}");
         $tmp = tempnam(sys_get_temp_dir(), 'fpm');
@@ -584,69 +693,60 @@ FPM;
 
     protected function removePhpFpmPool(string $username): void
     {
-        Process::run("sudo rm -f {$this->phpFpmPoolDir}/{$username}.conf");
+        Process::run("sudo rm -f " . escapeshellarg("{$this->phpFpmPoolDir}/{$username}.conf"));
     }
+
+    // =========================================================================
+    // EMAIL
+    // =========================================================================
 
     protected function createEmailDomain(string $username, string $domain): void
     {
+        // Create mail directory
         $home = "{$this->homeBase}/{$username}";
+        Process::run("sudo mkdir -p {$home}/mail/{$domain}");
 
-        // Create mail dir as user
-        ShellService::runAsUser($username, "mkdir -p mail/" . escapeshellarg($domain), 10, $home);
-
-        // Write to /etc/postfix/vhost as root (system file)
+        // Add domain to postfix virtual domains
         $vhostFile = '/etc/postfix/vhost';
         if (file_exists($vhostFile)) {
-            $existing = file_get_contents($vhostFile);
-            if (strpos($existing, $domain) === false) {
-                Process::run("echo " . escapeshellarg($domain) . " >> " . escapeshellarg($vhostFile));
+            $existing = Process::run("sudo grep -q " . escapeshellarg($domain) . " " . escapeshellarg($vhostFile) . " 2>/dev/null");
+            if ($existing->failed()) {
+                Process::run("sudo bash -c " . escapeshellarg("echo " . escapeshellarg($domain) . " >> " . escapeshellarg($vhostFile)));
             }
         } else {
-            Process::run("echo " . escapeshellarg($domain) . " > " . escapeshellarg($vhostFile));
+            Process::run("sudo bash -c " . escapeshellarg("echo " . escapeshellarg($domain) . " > " . escapeshellarg($vhostFile)));
         }
     }
 
     protected function removeEmailDomain(string $domain): void
     {
         $vhostFile = '/etc/postfix/vhost';
-        if (file_exists($vhostFile)) {
-            Process::run("sed -i '/^{$domain}$/d' {$vhostFile}");
+        if (file_exists($vhostFile) && $domain) {
+            Process::run("sudo sed -i '/" . preg_quote($domain, '/') . "/d' " . escapeshellarg($vhostFile));
         }
     }
+
+    // =========================================================================
+    // FTP
+    // =========================================================================
 
     protected function setupFtpUser(string $username, string $password): void
     {
         $home = "{$this->homeBase}/{$username}";
-
-        $result = Process::run("which pure-pw 2>/dev/null");
-        if ($result->successful()) {
-            $dbFile = '/etc/pureftpd.pdb';
-            Process::run(<<<BASH
-                echo -e "{$password}\n{$password}" | pure-pw useradd {$username} -u {$username} -d {$home} -f {$dbFile} 2>/dev/null
-            BASH);
-            Process::run("pure-pw mkdb {$dbFile} 2>/dev/null");
+        try {
+            FtpService::addUser($username, $username, $password, $home, 'openpanel');
+        } catch (\Throwable $e) {
+            // FTP setup is non-critical — log but don't fail account creation
+            \Log::warning("FTP user setup failed for {$username}: " . $e->getMessage());
         }
     }
 
-    protected function removeFtpUser(string $username): void
+    // =========================================================================
+    // DATABASE RECORD
+    // =========================================================================
+
+    protected function recordInDatabase(string $username, string $domain, string $ip, string $email, string $package, int $disk, int $bandwidth): void
     {
-        $result = Process::run("which pure-pw 2>/dev/null");
-        if ($result->successful()) {
-            $dbFile = '/etc/pureftpd.pdb';
-            Process::run("pure-pw userdel {$username} -f {$dbFile} 2>/dev/null");
-            Process::run("pure-pw mkdb {$dbFile} 2>/dev/null");
-        }
-    }
-
-    protected function recordInDatabase(
-        string $username,
-        string $domain,
-        string $ip,
-        string $email,
-        string $package,
-        int $disk,
-        int $bandwidth
-    ): void {
         DB::connection('mysql')->table('accounts')->insert([
             'username' => $username,
             'domain' => $domain,
@@ -655,33 +755,99 @@ FPM;
             'package' => $package,
             'disk_limit' => $disk,
             'bandwidth_limit' => $bandwidth,
-            'status' => 'active',
-            'backup' => 0,
+            'suspended' => false,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
     }
 
-    protected function removeFromDatabase(string $username): void
+    // =========================================================================
+    // SERVICES
+    // =========================================================================
+
+    public function reloadServices(): void
     {
-        DB::connection('mysql')->table('accounts')->where('username', $username)->delete();
+        $stack = WebStackService::getActiveStack();
+        $services = (new WebStackService())->getStackServices($stack);
+
+        foreach ($services as $service => $config) {
+            if ($config['reloadable'] ?? false) {
+                Process::run("sudo systemctl reload {$service} 2>/dev/null");
+            }
+        }
+
+        // Always reload PHP-FPM for pool changes
+        Process::run("sudo systemctl reload php-fpm 2>/dev/null");
     }
 
-    protected function updateDatabaseField(string $username, string $field, $value): void
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    protected function validateCreateData(array $data): void
     {
-        DB::connection('mysql')->table('accounts')->where('username', $username)->update([
-            $field => $value,
-            'updated_at' => now(),
-        ]);
+        if (empty($data['username'])) {
+            throw new \RuntimeException("Username is required.");
+        }
+        if (empty($data['domain'])) {
+            throw new \RuntimeException("Domain is required.");
+        }
+        if (empty($data['password'])) {
+            throw new \RuntimeException("Password is required.");
+        }
+
+        $username = $data['username'];
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $username)) {
+            throw new \RuntimeException("Username must start with a letter and contain only lowercase letters, numbers, and underscores.");
+        }
+        if (strlen($username) < 2 || strlen($username) > 32) {
+            throw new \RuntimeException("Username must be between 2 and 32 characters.");
+        }
     }
 
-    protected function reloadServices(): void
+    protected function getDefaultIp(): string
     {
-        $stack = $this->stackService->getActiveStack();
+        $setting = Setting::where('key', 'server_ip')->first();
+        if ($setting) return $setting->value;
 
-        $this->stackService->reloadStack($stack);
+        $result = Process::run("hostname -I | awk '{print $1}'");
+        return $result->successful() ? trim($result->output()) : '127.0.0.1';
+    }
 
-        Process::run("systemctl reload named 2>/dev/null || systemctl restart named 2>/dev/null");
-        Process::run("systemctl reload postfix 2>/dev/null || systemctl restart postfix 2>/dev/null");
+    // =========================================================================
+    // API COMPATIBILITY (delegate to WebStackService)
+    // =========================================================================
+
+    public function getSuspendedVhosts(): array
+    {
+        return $this->stackService->getSuspendedVhosts();
+    }
+
+    public function getNginxVhostContent(string $username): ?string
+    {
+        $path = "/etc/nginx/conf.d/users/{$username}.conf";
+        return file_exists($path) ? file_get_contents($path) : null;
+    }
+
+    public function getApacheVhostContent(string $username): ?string
+    {
+        $path = "/etc/httpd/conf.d/users/{$username}.conf";
+        return file_exists($path) ? file_get_contents($path) : null;
+    }
+
+    // =========================================================================
+    // STACK SERVICE PROXY
+    // =========================================================================
+
+    protected WebStackService $stackService;
+
+    public function __construct()
+    {
+        $this->stackService = new WebStackService();
+    }
+
+    public function __call(string $name, array $arguments)
+    {
+        return $this->stackService->$name(...$arguments);
     }
 }
