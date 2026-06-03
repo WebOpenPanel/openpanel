@@ -777,6 +777,12 @@ NGINXV
     mkdir -p /etc/openpanel
     echo "nginx_varnish_apache" > /etc/openpanel/web_stack
 
+    # Update DB stack setting (migrate defaults to nginx_phpfpm)
+    if command -v mysql &>/dev/null; then
+        DB_NAME="${DB_DATABASE:-openpanel}"
+        mysql -e "UPDATE \`${DB_NAME}\`.\`web_stack_settings\` SET \`active_stack\`='nginx_varnish_apache' WHERE \`id\`=1;" 2>/dev/null || true
+    fi
+
     log "Stack nginx_varnish_apache configured: nginx(80/443) → varnish(6081) → apache(8080)"
 }
 
