@@ -732,9 +732,15 @@ class WordPressService
     public function suspendSite(WordPressSite $site): array
     {
         $username = $this->getUsername($site);
+        $domain = $site->domain;
+
+        // 1. Stack-aware suspension (403 vhost + Varnish ban)
+        $stackResult = $this->stackService->suspendDomain($username, $domain);
+
+        // 2. Replace wp-config.php with maintenance stub as defense-in-depth
         ShellService::runAsUser($username, "mv " . escapeshellarg($site->install_path) . "/wp-config.php " . escapeshellarg($site->install_path) . "/wp-config.php.suspended", 10, "/home/{$username}");
 
-        $maintenance = "<?php \$upgrading = time(); http_response_code(503); header('Retry-After: 3600'); echo 'Site temporarily suspended.'; exit; ?>";
+        $maintenance = "<?php http_response_code(403); echo 'This account has been suspended.'; exit; ?>";
         $tempFile = tempnam(sys_get_temp_dir(), 'maint');
         file_put_contents($tempFile, $maintenance);
         chmod($tempFile, 0644);
@@ -742,16 +748,30 @@ class WordPressService
         @unlink($tempFile);
 
         $site->update(['status' => 'suspended']);
-        return ['success' => true, 'message' => "Site {$site->domain} suspended"];
+        return [
+            'success' => true,
+            'message' => "Site {$domain} suspended",
+            'stack_actions' => $stackResult['actions'] ?? [],
+        ];
     }
 
     public function unsuspendSite(WordPressSite $site): array
     {
         $username = $this->getUsername($site);
+        $domain = $site->domain;
+
+        // 1. Restore wp-config.php
         ShellService::runAsUser($username, "mv " . escapeshellarg($site->install_path) . "/wp-config.php.suspended " . escapeshellarg($site->install_path) . "/wp-config.php", 10, "/home/{$username}");
 
+        // 2. Stack-aware unsuspend (restore vhost + purge Varnish)
+        $stackResult = $this->stackService->unsuspendDomain($username, $domain);
+
         $site->update(['status' => 'active']);
-        return ['success' => true, 'message' => "Site {$site->domain} unsuspended"];
+        return [
+            'success' => true,
+            'message' => "Site {$domain} unsuspended",
+            'stack_actions' => $stackResult['actions'] ?? [],
+        ];
     }
 
     public function enableSsl(WordPressSite $site): array
