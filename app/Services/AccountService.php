@@ -182,6 +182,10 @@ class AccountService
             throw new \RuntimeException("Failed to create system user: " . ($result->errorOutput() ?: $result->output()));
         }
 
+        // Add nginx/apache to user's group so PHP-FPM can read files
+        Process::run("sudo /usr/sbin/usermod -aG {$username} nginx 2>/dev/null || true");
+        Process::run("sudo /usr/sbin/usermod -aG {$username} apache 2>/dev/null || true");
+
         $result = Process::run("echo '{$password}' | sudo /usr/bin/passwd --stdin {$username} 2>&1");
         if ($result->failed()) {
             Process::run("sudo /usr/sbin/userdel -r {$username}");
@@ -294,51 +298,8 @@ BIND;
     protected function createNginxVhost(string $username, string $domain): void
     {
         $home = "{$this->homeBase}/{$username}";
-
-        $vhost = <<<NGINX
-server {
-    listen 80;
-    listen [::]:80;
-    server_name {$domain} www.{$domain};
-
-    root {$home}/public_html;
-    index index.html index.htm index.php;
-
-    access_log {$home}/logs/nginx/access.log;
-    error_log {$home}/logs/nginx/error.log;
-
-    client_max_body_size 64M;
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    location ~ \.php\$ {
-        fastcgi_pass unix:/run/openpanel-php-user-{$username}.sock;
-        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
-        include fastcgi_params;
-        fastcgi_read_timeout 300;
-    }
-
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-
-    location /cgi-bin/ {
-        gzip off;
-        root {$home}/public_html;
-        include fastcgi_params;
-    }
-}
-NGINX;
-
-        Process::run("mkdir -p {$this->nginxVhostDir}");
-        Process::run("cat > {$this->nginxVhostDir}/{$username}.conf <<'VHOSTEOF'\n{$vhost}\nVHOSTEOF");
+        $stack = $this->stackService->getCurrentStack();
+        $this->stackService->generateVhostForDomain($stack, $username, $domain, $home);
     }
 
     protected function removeNginxVhost(string $username): void

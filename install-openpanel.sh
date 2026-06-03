@@ -621,6 +621,10 @@ install_httpd() {
 </FilesMatch>
 APACHEPHP
 
+    # Include user vhost configs from subdirectory
+    mkdir -p /etc/httpd/conf.d/users
+    echo 'IncludeOptional conf.d/users/*.conf' >> /etc/httpd/conf/httpd.conf
+
     systemctl enable httpd 2>&1 | tee -a "$LOG_FILE"
     log "Apache installed on port 8080"
 }
