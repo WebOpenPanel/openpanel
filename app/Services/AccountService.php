@@ -2,10 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\Account;
-use App\Models\Domain;
 use App\Models\Package;
-use App\Models\Setting;
 use App\Services\ShellService;
 use App\Services\ResourceControlService;
 use Illuminate\Support\Facades\DB;
@@ -807,8 +804,11 @@ CONF;
 
     protected function getDefaultIp(): string
     {
-        $setting = Setting::where('key', 'server_ip')->first();
-        if ($setting) return $setting->value;
+        // Try database settings table first
+        try {
+            $setting = DB::connection('mysql')->table('settings')->where('key', 'server_ip')->first();
+            if ($setting) return $setting->value;
+        } catch (\Throwable $e) {}
 
         $result = Process::run("hostname -I | awk '{print $1}'");
         return $result->successful() ? trim($result->output()) : '127.0.0.1';
