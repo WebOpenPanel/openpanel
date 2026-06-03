@@ -245,6 +245,7 @@ class AccountService
             '.ssh',
             'logs',
             'logs/nginx',
+            'logs/apache',
             'tmp',
             'mail',
             'backups',
