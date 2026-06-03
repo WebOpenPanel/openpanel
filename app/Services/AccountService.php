@@ -224,8 +224,7 @@ class AccountService
         Process::run("sudo chage -E 0 " . escapeshellarg($username) . " 2>/dev/null");
 
         // Write suspended vhosts (nginx 403 + Varnish ban + Apache 403)
-        $stack = WebStackService::getActiveStack();
-        $suspendResult = $this->stackService->suspendDomain($stack, $username, $domain);
+        $suspendResult = $this->stackService->suspendDomain($username, $domain);
 
         DB::connection('mysql')->table('accounts')
             ->where('username', $username)
@@ -258,8 +257,7 @@ class AccountService
         Process::run("sudo chage -E -1 " . escapeshellarg($username) . " 2>/dev/null");
 
         // Remove suspended vhosts and restore normal vhosts
-        $stack = WebStackService::getActiveStack();
-        $unsuspendResult = $this->stackService->unsuspendDomain($stack, $username, $domain);
+        $unsuspendResult = $this->stackService->unsuspendDomain($username, $domain);
 
         DB::connection('mysql')->table('accounts')
             ->where('username', $username)
