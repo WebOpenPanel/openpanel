@@ -89,14 +89,38 @@ class AccountService
             throw new \RuntimeException("User '{$username}' not found.");
         }
 
+        $domain = $user['domain'] ?? '';
+
+        // 1. Lock OS account
         Process::run("passwd -l {$username}");
         Process::run("chage -E 0 {$username}");
 
+        // 2. Update DB status
         $this->updateDatabaseField($username, 'status', 'suspended');
 
-        $this->reloadServices();
+        // 3. Stack-aware suspension: 403 vhost + Varnish ban
+        $stackResult = $this->stackService->suspendDomain($username, $domain);
 
-        return ['success' => true, 'message' => "Account '{$username}' suspended."];
+        // 4. WordPress Varnish purge if applicable
+        $wpPurgeResult = null;
+        try {
+            $site = DB::connection('mysql')->table('wordpress_sites')
+                ->where('domain', $domain)->first();
+            if ($site) {
+                $this->stackService->purgeVarnishCache($domain);
+                $wpPurgeResult = 'purged';
+            }
+        } catch (\Throwable $e) {
+            $wpPurgeResult = 'skipped: ' . $e->getMessage();
+        }
+
+        return [
+            'success' => true,
+            'message' => "Account '{$username}' suspended.",
+            'domain' => $domain,
+            'stack_actions' => $stackResult['actions'] ?? [],
+            'varnish_purge' => $wpPurgeResult,
+        ];
     }
 
     public function unsuspend(string $username): array
@@ -106,14 +130,24 @@ class AccountService
             throw new \RuntimeException("User '{$username}' not found.");
         }
 
+        $domain = $user['domain'] ?? '';
+
+        // 1. Unlock OS account
         Process::run("passwd -u {$username}");
         Process::run("chage -E -1 {$username}");
 
+        // 2. Update DB status
         $this->updateDatabaseField($username, 'status', 'active');
 
-        $this->reloadServices();
+        // 3. Stack-aware unsuspend: restore vhost + Varnish purge
+        $stackResult = $this->stackService->unsuspendDomain($username, $domain);
 
-        return ['success' => true, 'message' => "Account '{$username}' unsuspended."];
+        return [
+            'success' => true,
+            'message' => "Account '{$username}' unsuspended.",
+            'domain' => $domain,
+            'stack_actions' => $stackResult['actions'] ?? [],
+        ];
     }
 
     public function changePassword(string $username, string $newPassword): array

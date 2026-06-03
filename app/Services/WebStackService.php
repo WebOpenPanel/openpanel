@@ -389,6 +389,129 @@ class WebStackService
             ->toArray();
     }
 
+    /**
+     * Suspend a domain: replace vhost with 403 + purge Varnish cache.
+     * Returns structured result with actions taken.
+     */
+    public function suspendDomain(string $username, string $domain): array
+    {
+        $stack = $this->getActiveStack();
+        $result = ['stack' => $stack, 'actions' => [], 'success' => true];
+
+        // 1. Write suspended nginx vhost (returns 403 for all requests)
+        $suspendedVhost = <<<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {$domain} www.{$domain};
+    return 403;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {$domain} www.{$domain};
+    ssl_certificate /etc/pki/tls/certs/openpanel.crt;
+    ssl_certificate_key /etc/pki/tls/private/openpanel.key;
+    return 403;
+}
+NGINX;
+
+        $vhostPath = "/etc/nginx/conf.d/users/{$username}.conf";
+        $backupPath = "/etc/nginx/conf.d/users/{$username}.conf.suspended";
+        if (file_exists($vhostPath)) {
+            Process::run("cp {$vhostPath} {$backupPath}");
+        }
+        file_put_contents($vhostPath, $suspendedVhost);
+        $result['actions'][] = 'nginx_suspended_vhost_written';
+
+        // 2. For varnish stacks: ban cache for this domain
+        if (in_array($stack, ['nginx_varnish_apache', 'nginx_apache'])) {
+            $banResult = Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
+            $result['actions'][] = $banResult->successful() ? 'varnish_ban_ok' : 'varnish_ban_failed: ' . $banResult->output();
+
+            // Also ban www subdomain
+            Process::run("varnishadm 'ban req.http.host == \"www.{$domain}\"' 2>&1");
+        }
+
+        // 3. Test nginx config before reload
+        $test = Process::run("nginx -t 2>&1");
+        if ($test->successful()) {
+            Process::run("systemctl reload nginx");
+            $result['actions'][] = 'nginx_reloaded';
+        } else {
+            // Rollback
+            if (file_exists($backupPath)) {
+                Process::run("cp {$backupPath} {$vhostPath}");
+            }
+            $result['success'] = false;
+            $result['actions'][] = 'nginx_config_failed_rolled_back';
+        }
+
+        return $result;
+    }
+
+    /**
+     * Unsuspend a domain: restore original vhost + purge Varnish cache.
+     * Returns structured result with actions taken.
+     */
+    public function unsuspendDomain(string $username, string $domain): array
+    {
+        $stack = $this->getActiveStack();
+        $result = ['stack' => $stack, 'actions' => [], 'success' => true];
+
+        $vhostPath = "/etc/nginx/conf.d/users/{$username}.conf";
+        $backupPath = "/etc/nginx/conf.d/users/{$username}.conf.suspended";
+
+        // 1. Restore original vhost from backup
+        if (file_exists($backupPath)) {
+            Process::run("cp {$backupPath} {$vhostPath}");
+            Process::run("rm -f {$backupPath}");
+            $result['actions'][] = 'nginx_vhost_restored_from_backup';
+        } else {
+            // No backup — need to regenerate vhost from account data
+            $account = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+            if ($account) {
+                $home = "/home/{$username}";
+                $this->generateVhostForDomain($stack, $username, $domain, $home);
+                $result['actions'][] = 'nginx_vhost_regenerated';
+            } else {
+                $result['success'] = false;
+                $result['actions'][] = 'no_backup_no_account';
+                return $result;
+            }
+        }
+
+        // 2. For varnish stacks: purge cache so stale 403 is not served
+        if (in_array($stack, ['nginx_varnish_apache', 'nginx_apache'])) {
+            $banResult = Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
+            $result['actions'][] = $banResult->successful() ? 'varnish_purge_ok' : 'varnish_purge_failed';
+
+            Process::run("varnishadm 'ban req.http.host == \"www.{$domain}\"' 2>&1");
+        }
+
+        // 3. Test and reload
+        $test = Process::run("nginx -t 2>&1");
+        if ($test->successful()) {
+            Process::run("systemctl reload nginx");
+            $result['actions'][] = 'nginx_reloaded';
+        } else {
+            $result['success'] = false;
+            $result['actions'][] = 'nginx_config_failed';
+        }
+
+        return $result;
+    }
+
+    /**
+     * Purge Varnish cache for a domain.
+     */
+    public function purgeVarnishCache(string $domain): bool
+    {
+        $result = Process::run("varnishadm 'ban req.http.host == \"{$domain}\"' 2>&1");
+        return $result->successful();
+    }
+
     protected function generateNginxPhpfpmVhost(string $username, string $domain, string $home): void
     {
         $vhost = <<<NGINX
