@@ -45,7 +45,8 @@ class V1Controller extends Controller
 
     public function health(): JsonResponse
     {
-        return $this->ok(['status' => 'ok', 'version' => '1.0.0']);
+        $version = trim(file_get_contents(base_path('VERSION'))) ?? '0.1.0-beta';
+        return $this->ok(['status' => 'ok', 'version' => $version]);
     }
 
     public function abuseMonitor(Request $request): JsonResponse
@@ -162,7 +163,7 @@ class V1Controller extends Controller
         }
 
         try {
-            $result = (new AccountService())->delete($username);
+            $result = (new AccountService())->terminate($username);
             return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());

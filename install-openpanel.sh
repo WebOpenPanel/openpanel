@@ -23,6 +23,59 @@ warn() { echo -e "${YELLOW}[WARNING]${NC} $1" | tee -a "$LOG_FILE"; }
 err()  { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"; exit 1; }
 step() { echo -e "\n${BLUE}========================================${NC}" | tee -a "$LOG_FILE"; echo -e "${BLUE}  $1${NC}" | tee -a "$LOG_FILE"; echo -e "${BLUE}========================================${NC}\n" | tee -a "$LOG_FILE"; }
 
+show_help() {
+    echo "OpenPanel Installer (0.1.0-beta)"
+    echo ""
+    echo "Usage: sudo bash install-openpanel.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --help                       Show this help message"
+    echo "  --stack=STACK                Web stack: nginx_phpfpm (default) or nginx_varnish_apache"
+    echo "  --non-interactive            No prompts (use defaults or env vars)"
+    echo "  --hostname=HOSTNAME          Server hostname"
+    echo "  --email=EMAIL                Admin email address"
+    echo "  --skip-ssl                   Skip SSL certificate generation"
+    echo ""
+    echo "Environment Variables:"
+    echo "  NON_INTERACTIVE=y            Same as --non-interactive"
+    echo "  OPENPANEL_WEB_STACK=STACK    Same as --stack=STACK"
+    echo ""
+    echo "Examples:"
+    echo "  sudo bash install-openpanel.sh"
+    echo "  sudo bash install-openpanel.sh --stack=nginx_varnish_apache --non-interactive"
+    echo "  NON_INTERACTIVE=y OPENPANEL_WEB_STACK=nginx_phpfpm sudo bash install-openpanel.sh"
+    echo ""
+    exit 0
+}
+
+parse_args() {
+    for arg in "$@"; do
+        case "$arg" in
+            --help|-h)
+                show_help
+                ;;
+            --stack=*)
+                OPENPANEL_WEB_STACK="${arg#*=}"
+                ;;
+            --non-interactive)
+                NON_INTERACTIVE="y"
+                ;;
+            --hostname=*)
+                PANEL_HOSTNAME="${arg#*=}"
+                ;;
+            --email=*)
+                PANEL_EMAIL="${arg#*=}"
+                ;;
+            --skip-ssl)
+                SKIP_SSL="y"
+                ;;
+            *)
+                warn "Unknown option: $arg"
+                ;;
+        esac
+    done
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         err "This script must be run as root. Usage: sudo bash $0"
@@ -152,6 +205,12 @@ gather_config() {
 
         read -p "Restart server after install? (y/N): " DO_RESTART
         DO_RESTART="${DO_RESTART:-N}"
+    fi
+
+    # Apply --hostname if provided
+    if [ -n "${PANEL_HOSTNAME:-}" ]; then
+        hostnamectl set-hostname "$PANEL_HOSTNAME" 2>/dev/null || hostname "$PANEL_HOSTNAME"
+        log "Hostname set to $PANEL_HOSTNAME"
     fi
 
     if [ -n "${ROOT_PASSWORD:-}" ]; then
@@ -409,7 +468,7 @@ MAIL_PORT=25
 MAIL_USERNAME=null
 MAIL_PASSWORD=null
 MAIL_ENCRYPTION=null
-MAIL_FROM_ADDRESS="noreply@$(hostname -f 2>/dev/null || hostname)"
+MAIL_FROM_ADDRESS="${PANEL_EMAIL:-noreply@$(hostname -f 2>/dev/null || hostname)}"
 MAIL_FROM_NAME="OpenPanel"
 EOF
 
@@ -469,6 +528,12 @@ build_assets() {
 
 configure_nginx() {
     step "Configuring Nginx"
+
+    # Include per-user vhosts (must be before catch-all server blocks)
+    mkdir -p /etc/nginx/conf.d/users
+    cat > /etc/nginx/conf.d/00-users.conf <<'EONGX0'
+include /etc/nginx/conf.d/users/*.conf;
+EONGX0
 
     cat > /etc/nginx/conf.d/openpanel.conf <<'EONGX'
 server {
@@ -1122,7 +1187,9 @@ print_summary() {
     echo -e "${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  Install Dir:    ${INSTALL_DIR}"
     echo -e "${GREEN}║${NC}  PHP Version:    ${PHP_VERSION}"
+    echo -e "${GREEN}║${NC}  Web Stack:      ${OPENPANEL_WEB_STACK:-nginx_phpfpm}"
     echo -e "${GREEN}║${NC}  Credentials:    /root/.openpanel-credentials"
+    echo -e "${GREEN}║${NC}  Install Log:    ${LOG_FILE}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${RED}  IMPORTANT: Save credentials and delete /root/.openpanel-credentials${NC}"
@@ -1136,10 +1203,12 @@ print_summary() {
 }
 
 main() {
+    parse_args "$@"
+
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║            OpenPanel - Server Control Panel                  ║${NC}"
-    echo -e "${BLUE}║                     Installer v1.0.0                        ║${NC}"
+    echo -e "${BLUE}║                     Installer v0.1.0-beta                   ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
@@ -1168,7 +1237,11 @@ main() {
         create_admin_user
         build_auth_helper
         build_assets
-        generate_ssl
+        if [[ "${SKIP_SSL:-}" != "y" ]]; then
+            generate_ssl
+        else
+            log "Skipping SSL generation (--skip-ssl)"
+        fi
         configure_nginx
         if [[ "${OPENPANEL_WEB_STACK:-nginx_phpfpm}" == "nginx_varnish_apache" ]]; then
             install_httpd

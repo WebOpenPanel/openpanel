@@ -513,12 +513,16 @@ APACHE;
         }
 
         // 5. Test and reload nginx
-        $test = Process::run("nginx -t 2>&1");
+        $test = Process::run("sudo nginx -t 2>&1");
         if ($test->successful()) {
-            Process::run("systemctl reload nginx");
+            Process::run("sudo systemctl reload nginx");
             $result['actions'][] = 'nginx_reloaded';
         } else {
-            @unlink($suspendConfPath);
+            // Rollback: remove suspended vhost AND restore normal vhost
+            Process::run("sudo rm -f " . escapeshellarg($suspendConfPath));
+            if (file_exists($normalVhost . '.suspended')) {
+                Process::run("sudo mv " . escapeshellarg($normalVhost . '.suspended') . " " . escapeshellarg($normalVhost));
+            }
             $result['success'] = false;
             $result['actions'][] = 'nginx_config_failed_rolled_back';
         }

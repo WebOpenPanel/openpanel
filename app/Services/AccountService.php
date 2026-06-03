@@ -430,10 +430,10 @@ class AccountService
             }
         }
 
-        // 9. Reload PHP-FPM if pool was modified
+        // 9. Defer PHP-FPM reload to background (reloading mid-request kills the worker → 502)
         if (in_array('php_fpm_pool_created', $result['actions']) ||
             in_array('php_fpm_pool_recreated', $result['actions'])) {
-            Process::run("sudo systemctl reload php-fpm 2>/dev/null");
+            Process::run("sudo bash -c 'sleep 1 && systemctl reload php-fpm' >/dev/null 2>&1 &");
         }
 
         // 10. Fix .htaccess if missing
@@ -647,9 +647,9 @@ BIND;
         $zoneFile = "{$this->dnsZoneDir}/{$domain}.db";
         Process::run("sudo rm -f " . escapeshellarg($zoneFile));
 
-        // Remove zone block from named.conf
-        Process::run("sudo sed -i '/zone \"{$domain}\"/,/};/d' /etc/named.conf 2>/dev/null");
-        Process::run("sudo systemctl reload named 2>/dev/null");
+        // Remove zone block from named.conf (match ^}; to avoid nested }; inside allow-update)
+        Process::run("sudo sed -i '/zone \"{$domain}\" IN {/,/^};/d' /etc/named.conf 2>/dev/null");
+        Process::run("sudo named-checkconf 2>/dev/null && sudo systemctl reload named 2>/dev/null || true");
     }
 
     // =========================================================================
@@ -793,8 +793,8 @@ CONF;
             }
         }
 
-        // Always reload PHP-FPM for pool changes
-        Process::run("sudo systemctl reload php-fpm 2>/dev/null");
+        // Defer PHP-FPM reload to background (reloading mid-request kills the worker → 502)
+        Process::run("sudo bash -c 'sleep 1 && systemctl reload php-fpm' >/dev/null 2>&1 &");
     }
 
     // =========================================================================

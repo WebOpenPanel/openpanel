@@ -34,7 +34,7 @@ class ApiToken extends Model
 
     public function hasScope(string $scope): bool
     {
-        if (!$this->scopes || in_array('admin:all', $this->scopes)) {
+        if (!$this->scopes || in_array('*', $this->scopes) || in_array('admin:all', $this->scopes)) {
             return true;
         }
         return in_array($scope, $this->scopes);
