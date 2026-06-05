@@ -13,13 +13,17 @@ class SslCertificate extends Model
     protected $fillable = [
         'user_account_id', 'domain', 'certificate', 'private_key',
         'ca_bundle', 'issuer', 'serial_number', 'type', 'status',
-        'issued_at', 'expires_at', 'auto_renew', 'fullchain',
+        'issued_at', 'expires_at', 'auto_renew', 'force_https', 'fullchain',
+        'cert_path', 'key_path', 'vhost_installed',
+        'last_renewal_status', 'last_error',
     ];
 
     protected function casts(): array
     {
         return [
             'auto_renew' => 'boolean',
+            'force_https' => 'boolean',
+            'vhost_installed' => 'boolean',
             'issued_at' => 'datetime',
             'expires_at' => 'datetime',
         ];

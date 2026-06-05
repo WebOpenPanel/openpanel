@@ -13,7 +13,7 @@ class MysqlUser extends Model
     protected $table = 'mysql_users';
 
     protected $fillable = [
-        'user_account_id', 'username', 'password_hash',
+        'account_id', 'user_account_id', 'username', 'password_hash',
     ];
 
     protected $hidden = ['password_hash'];

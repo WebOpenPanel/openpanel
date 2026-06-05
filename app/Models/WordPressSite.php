@@ -15,6 +15,8 @@ class WordPressSite extends Model
 
     protected $fillable = [
         'user_account_id',
+        'parent_site_id',
+        'site_type',
         'domain_id',
         'domain',
         'install_path',
@@ -43,6 +45,7 @@ class WordPressSite extends Model
         'wp_cron_interval',
         'last_scan_at',
         'last_backup_at',
+        'last_pushed_at',
     ];
 
     protected function casts(): array
@@ -61,7 +64,18 @@ class WordPressSite extends Model
             'wp_cron_interval' => 'integer',
             'last_scan_at' => 'datetime',
             'last_backup_at' => 'datetime',
+            'last_pushed_at' => 'datetime',
         ];
+    }
+
+    public function parentSite(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_site_id');
+    }
+
+    public function stagingSites(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_site_id')->where('site_type', 'staging');
     }
 
     public function userAccount(): BelongsTo

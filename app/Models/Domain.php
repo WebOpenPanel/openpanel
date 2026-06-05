@@ -13,7 +13,7 @@ class Domain extends Model
     protected $fillable = [
         'user_account_id', 'domain', 'document_root', 'ip_address',
         'type', 'ssl_enabled', 'ssl_certificate', 'ssl_key', 'ssl_ca',
-        'ssl_provider', 'ssl_expires_at', 'auto_ssl',
+        'ssl_provider', 'ssl_expires_at', 'auto_ssl', 'force_https',
         'custom_vhost_config', 'redirect_url', 'redirect_type',
     ];
 
@@ -22,6 +22,7 @@ class Domain extends Model
         return [
             'ssl_enabled' => 'boolean',
             'auto_ssl' => 'boolean',
+            'force_https' => 'boolean',
             'ssl_expires_at' => 'datetime',
         ];
     }

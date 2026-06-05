@@ -83,6 +83,7 @@ class ApiToken extends Model
             'email:manage',
             'database:manage',
             'ssl:manage',
+            'varnish:manage',
             'reseller:manage',
         ];
     }

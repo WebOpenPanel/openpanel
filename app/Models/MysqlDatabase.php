@@ -13,7 +13,7 @@ class MysqlDatabase extends Model
     protected $table = 'mysql_databases';
 
     protected $fillable = [
-        'user_account_id', 'database_name', 'charset', 'collation', 'size_bytes',
+        'account_id', 'user_account_id', 'database_name', 'charset', 'collation', 'size_bytes',
     ];
 
     public function userAccount()
