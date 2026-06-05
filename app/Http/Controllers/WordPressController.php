@@ -37,7 +37,8 @@ class WordPressController extends Controller
         $diskUsage = $this->wp->getDiskUsage($site);
         $latestScan = $site->securityScans()->latest()->first();
         $latestBackup = $site->backups()->latest()->first();
-        return view('wordpress.show', compact('site', 'updates', 'plugins', 'themes', 'diskUsage', 'latestScan', 'latestBackup'));
+        $stagingSites = $site->stagingSites()->get();
+        return view('wordpress.show', compact('site', 'updates', 'plugins', 'themes', 'diskUsage', 'latestScan', 'latestBackup', 'stagingSites'));
     }
 
     public function create()
@@ -123,16 +124,23 @@ class WordPressController extends Controller
         return back()->with($result['success'] ? 'success' : 'error', $result['output'] ?? 'Staging creation failed.');
     }
 
-    public function pushStaging(WordPressSite $site)
+    public function pushStaging(Request $request, WordPressSite $site)
     {
         $this->authorizeSite($site);
-        $stagingDomain = "staging.{$site->domain}";
+        $stagingDomain = $request->input('staging_domain', "staging.{$site->domain}");
         $stagingSite = WordPressSite::where('domain', $stagingDomain)->first();
         if (!$stagingSite) {
             return back()->with('error', 'Staging site not found.');
         }
         $result = $this->wp->pushStagingToLive($stagingSite, $site);
         return back()->with($result['success'] ? 'success' : 'error', $result['output'] ?? 'Push failed.');
+    }
+
+    public function deleteStaging(Request $request, WordPressSite $site)
+    {
+        $this->authorizeSite($site);
+        $result = $this->wp->deleteStaging($site, $request->input('staging_domain'));
+        return back()->with($result['success'] ? 'success' : 'error', $result['output'] ?? $result['message'] ?? 'Delete staging failed.');
     }
 
     public function securityScan(WordPressSite $site)

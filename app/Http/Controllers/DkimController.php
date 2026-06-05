@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\EmailDeliverabilityService;
 use Illuminate\Http\Request;
 use Illuminate\Process\Factory as ProcessFactory;
 
@@ -21,36 +22,29 @@ class DkimController extends Controller
 
     public function generate(Request $request)
     {
-        $request->validate(['domain' => 'required|string|max:255']);
-        $domain = strtolower($request->domain);
+        $request->validate([
+            'domain' => ['required', 'string', 'max:255', 'regex:/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i'],
+        ]);
 
-        $result = $this->process()->run("opendkim-genkey -D /etc/opendkim/keys/{$domain} -d {$domain} -s default 2>&1");
-        if ($result->failed()) {
-            return back()->with('error', 'Key gen failed: ' . $result->errorOutput());
+        try {
+            $result = (new EmailDeliverabilityService())->enableDkim($request->domain, 'default', false);
+            return back()
+                ->with('success', "DKIM key generated for {$result['domain']}.")
+                ->with('dnsRecord', $result['records']['dkim']['value'] ?? '');
+        } catch (\Throwable $e) {
+            return back()->with('error', 'DKIM setup failed: ' . $e->getMessage());
         }
-
-        $this->process()->run("chown -R opendkim:opendkim /etc/opendkim/keys/{$domain}");
-
-        $keyFile = "/etc/opendkim/keys/{$domain}/default.txt";
-        $dnsRecord = file_exists($keyFile) ? file_get_contents($keyFile) : '';
-
-        $signingTable = '/etc/opendkim/SigningTable';
-        $keyTable = '/etc/opendkim/KeyTable';
-
-        file_put_contents($signingTable, "*@{$domain} default._domainkey.{$domain}\n", FILE_APPEND);
-        file_put_contents($keyTable, "default._domainkey.{$domain} {$domain}:default:/etc/opendkim/keys/{$domain}/default.private\n", FILE_APPEND);
-
-        $this->process()->run("systemctl restart opendkim");
-
-        return back()->with('success', "DKIM key generated for {$domain}.")->with('dnsRecord', $dnsRecord);
     }
 
     public function viewKey(Request $request)
     {
-        $request->validate(['domain' => 'required|string']);
+        $request->validate([
+            'domain' => ['required', 'string', 'max:255', 'regex:/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i'],
+        ]);
+
         $domain = strtolower($request->domain);
-        $keyFile = "/etc/opendkim/keys/{$domain}/default.txt";
-        $dns = file_exists($keyFile) ? file_get_contents($keyFile) : 'Key not found.';
+        $record = (new EmailDeliverabilityService())->dnsHelperRecords($domain)['dkim']['value'] ?? null;
+        $dns = $record ?: 'Key not found.';
         return view('dkim.key', compact('dns', 'domain'));
     }
 
@@ -78,6 +72,8 @@ class DkimController extends Controller
     {
         $dir = '/etc/opendkim/keys';
         if (!is_dir($dir)) return [];
-        return array_values(array_diff(scandir($dir), ['.', '..']));
+        return array_values(array_filter(array_diff(scandir($dir), ['.', '..']), function ($domain) {
+            return preg_match('/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i', $domain);
+        }));
     }
 }

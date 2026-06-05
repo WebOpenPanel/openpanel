@@ -1061,6 +1061,7 @@ Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class, \App\Htt
         Route::post('/{site}/clone', [\App\Http\Controllers\WordPressController::class, 'cloneSite'])->name('clone');
         Route::post('/{site}/staging', [\App\Http\Controllers\WordPressController::class, 'createStaging'])->name('staging');
         Route::post('/{site}/push-staging', [\App\Http\Controllers\WordPressController::class, 'pushStaging'])->name('push-staging');
+        Route::post('/{site}/delete-staging', [\App\Http\Controllers\WordPressController::class, 'deleteStaging'])->name('delete-staging');
         Route::post('/{site}/scan', [\App\Http\Controllers\WordPressController::class, 'securityScan'])->name('scan');
         Route::post('/{site}/secure', [\App\Http\Controllers\WordPressController::class, 'secure'])->name('secure');
         Route::post('/{site}/repair-permissions', [\App\Http\Controllers\WordPressController::class, 'repairPermissions'])->name('repair-permissions');
@@ -1184,6 +1185,8 @@ Route::middleware(['auth', \App\Http\Middleware\UserMiddleware::class])->prefix(
     Route::post('/wordpress/{site}/backup', [UserWordPressController::class, 'backup'])->name('wordpress.backup');
     Route::post('/wordpress/{site}/restore', [UserWordPressController::class, 'restore'])->name('wordpress.restore');
     Route::post('/wordpress/{site}/staging', [UserWordPressController::class, 'createStaging'])->name('wordpress.staging');
+    Route::post('/wordpress/{site}/push-staging', [UserWordPressController::class, 'pushStaging'])->name('wordpress.push-staging');
+    Route::post('/wordpress/{site}/delete-staging', [UserWordPressController::class, 'deleteStaging'])->name('wordpress.delete-staging');
     Route::post('/wordpress/{site}/purge-cache', [UserWordPressController::class, 'purgeCache'])->name('wordpress.purge-cache');
     Route::post('/wordpress/{site}/enable-redis', [UserWordPressController::class, 'enableRedis'])->name('wordpress.enable-redis');
     Route::post('/wordpress/{site}/disable-redis', [UserWordPressController::class, 'disableRedis'])->name('wordpress.disable-redis');

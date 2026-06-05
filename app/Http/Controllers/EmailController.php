@@ -7,18 +7,20 @@ use App\Models\EmailForwarder;
 use App\Models\EmailAutoresponder;
 use App\Models\UserAccount;
 use App\Services\MailService;
+use App\Services\EmailService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class EmailController extends Controller
 {
     public function index(Request $request)
     {
-        $query = EmailAccount::with('userAccount');
+        $query = EmailAccount::query();
         if ($request->filled('search')) {
             $query->where('email', 'like', "%{$request->search}%");
         }
         $emailAccounts = $query->latest()->paginate(20);
-        $accounts = UserAccount::where('suspended', 'no')->orderBy('domain')->get();
+        $accounts = DB::table('accounts')->where('status', 'active')->orderBy('domain')->get();
         $mailStatus = MailService::getMailServerStatus();
         return view('email.index', compact('emailAccounts', 'accounts', 'mailStatus'));
     }
@@ -26,26 +28,23 @@ class EmailController extends Controller
     public function createAccount(Request $request)
     {
         $request->validate([
-            'user_account_id' => 'required|exists:user_accounts,id',
+            'account_id' => 'required|integer',
             'email_prefix' => 'required|string|max:64',
             'password' => 'required|string|min:8|confirmed',
             'quota_mb' => 'nullable|integer|min:0',
         ]);
-        $account = UserAccount::find($request->user_account_id);
-        $email = $request->email_prefix . '@' . $account->domain;
-        EmailAccount::create([
-            'user_account_id' => $account->id,
-            'domain' => $account->domain,
-            'email' => $email,
-            'password_hash' => bcrypt($request->password),
-            'quota_mb' => $request->quota_mb ?? 250,
-        ]);
-        return back()->with('success', "Email account '{$email}' created.");
+        $account = DB::table('accounts')->where('id', $request->account_id)->where('status', 'active')->first();
+        if (!$account) {
+            return back()->with('error', 'Hosting account not found.');
+        }
+
+        $result = (new EmailService())->createMailbox($account, $account->domain, $request->email_prefix, $request->password, $request->quota_mb ?? 250);
+        return back()->with('success', "Email account '{$result['email']}' created.");
     }
 
     public function destroyAccount(EmailAccount $emailAccount)
     {
-        $emailAccount->delete();
+        (new EmailService())->deleteMailbox($emailAccount->email);
         return back()->with('success', 'Email account deleted.');
     }
 

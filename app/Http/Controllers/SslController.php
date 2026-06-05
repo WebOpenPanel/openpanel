@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\DB;
 use App\Services\WebServerService;
 use App\Services\ShellService;
 use App\Services\PanelSslService;
+use App\Services\DomainSslService;
 use Illuminate\Http\Request;
 
 class SslController extends Controller
@@ -104,8 +105,14 @@ class SslController extends Controller
         $request->validate([
             'domain' => 'required|string|max:255',
             'email' => 'nullable|email',
+            'force_https' => 'nullable|boolean',
         ]);
-        $output = WebServerService::letsEncryptIssue($request->domain, $request->email ?? '');
+        $result = (new DomainSslService())->issue(
+            $request->domain,
+            $request->email ?? null,
+            $request->boolean('force_https')
+        );
+        $output = json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         return back()->with('output', $output)->with('success', "Let's Encrypt certificate issued for {$request->domain}.");
     }
 

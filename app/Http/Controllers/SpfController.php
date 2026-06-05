@@ -26,8 +26,10 @@ class SpfController extends Controller
         $request->validate(['domain' => 'required|string']);
         $domain = $request->domain;
 
-        $spf = $this->process()->run("dig +short TXT {$domain} 2>/dev/null | grep spf");
-        $dmarc = $this->process()->run("dig +short TXT _dmarc.{$domain} 2>/dev/null");
+        $domainArg = escapeshellarg($domain);
+        $dmarcArg = escapeshellarg("_dmarc.{$domain}");
+        $spf = $this->process()->run("dig +short TXT {$domainArg} 2>/dev/null | grep spf");
+        $dmarc = $this->process()->run("dig +short TXT {$dmarcArg} 2>/dev/null");
 
         return view('spf.check', [
             'domain' => $domain,

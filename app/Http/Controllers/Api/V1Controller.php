@@ -8,9 +8,13 @@ use App\Models\WordPressSite;
 use App\Services\AccountService;
 use App\Services\ApiTokenService;
 use App\Services\DnsService;
+use App\Services\DomainSslService;
+use App\Services\EmailDeliverabilityService;
 use App\Services\EmailService;
 use App\Services\MysqlService;
+use App\Services\PhpMyAdminService;
 use App\Services\SslService;
+use App\Services\VarnishDomainService;
 use App\Services\WordPressService;
 use App\Services\WebStackService;
 use Illuminate\Http\JsonResponse;
@@ -294,6 +298,11 @@ class V1Controller extends Controller
             $result = (new WordPressService())->installWordPress($request->only([
                 'user_account_id', 'domain', 'site_title', 'admin_user', 'admin_password', 'admin_email',
             ]));
+            if (isset($result['site'])) {
+                $site = method_exists($result['site'], 'toArray') ? $result['site']->toArray() : (array) $result['site'];
+                unset($site['db_password_encrypted']);
+                $result['site'] = $site;
+            }
             return $this->ok($result, 201);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
@@ -323,7 +332,7 @@ class V1Controller extends Controller
         if (!$site) return $this->fail('Site not found', 404);
 
         try {
-            $result = (new WordPressService())->configureVarnishRules($site, true);
+            $result = (new WordPressService())->configureVarnishRules($site, 'cache');
             return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
@@ -355,7 +364,7 @@ class V1Controller extends Controller
         if (!$site) return $this->fail('Site not found', 404);
 
         try {
-            $result = (new WordPressService())->createBackup($site);
+            $result = (new WordPressService())->backupSite($site, $request->type ?? 'full');
             return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
@@ -372,7 +381,10 @@ class V1Controller extends Controller
         if (!$site) return $this->fail('Site not found', 404);
 
         try {
-            $result = (new WordPressService())->restoreSite($site, $request->backup_id);
+            $backup = \App\Models\WordPressBackup::where('wordpress_site_id', $site->id)->find($request->backup_id);
+            if (!$backup) return $this->fail('Backup not found', 404);
+
+            $result = (new WordPressService())->restoreSite($site, $backup);
             return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
@@ -388,7 +400,47 @@ class V1Controller extends Controller
 
         try {
             $result = (new WordPressService())->createStaging($site);
+            if (isset($result['staging_site']['db_password_encrypted'])) {
+                unset($result['staging_site']['db_password_encrypted']);
+            }
             return $this->ok($result, 201);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function wpStagingPush(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'wordpress:manage')) return $r;
+
+        $site = $this->findSite($request->site_id ?? 0, $request->domain ?? '');
+        if (!$site) return $this->fail('Site not found', 404);
+
+        $staging = \App\Models\WordPressSite::where('parent_site_id', $site->id)
+            ->where('site_type', 'staging')
+            ->when($request->staging_domain, fn($q) => $q->where('domain', $request->staging_domain))
+            ->first();
+
+        if (!$staging) return $this->fail('Staging site not found', 404);
+
+        try {
+            $result = (new WordPressService())->pushStagingToLive($staging, $site);
+            return $this->ok($result);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function wpStagingDelete(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'wordpress:manage')) return $r;
+
+        $site = $this->findSite($request->site_id ?? 0, $request->domain ?? '');
+        if (!$site) return $this->fail('Site not found', 404);
+
+        try {
+            $result = (new WordPressService())->deleteStaging($site, $request->staging_domain);
+            return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -513,30 +565,29 @@ class V1Controller extends Controller
 
         $request->validate([
             'domain' => 'required|string',
-            'username' => 'required|string',
-            'password' => 'required|string|min:6',
+            'username' => 'nullable|string',
+            'local_part' => 'nullable|string',
+            'password' => 'required|string|min:8',
+            'quota' => 'nullable|integer|min:0',
+            'quota_mb' => 'nullable|integer|min:0',
         ]);
 
         try {
-            $email = $request->username . '@' . $request->domain;
-            $result = Process::run("doveadm pw -s SHA512-CRYPT -p '{$request->password}' 2>/dev/null");
-            $hash = trim($result->output());
+            $account = (new EmailService())->accountForDomain($request->domain);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
 
-            DB::connection('mysql')->table('email_accounts')->insert([
-                'domain' => $request->domain,
-                'username' => $request->username,
-                'password' => $hash,
-                'quota' => $request->quota ?? 250,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            $localPart = $request->local_part ?: $request->username;
+            if (!$localPart) return $this->fail('local_part or username required');
 
-            // Create maildir
-            $maildir = "/var/vmail/{$request->domain}/{$request->username}";
-            Process::run("maildirmake {$maildir} 2>/dev/null || mkdir -p {$maildir}");
-            Process::run("chown -R vmail:vmail /var/vmail/{$request->domain}");
+            $result = (new EmailService())->createMailbox(
+                $account,
+                $request->domain,
+                $localPart,
+                $request->password,
+                (int) ($request->quota_mb ?? $request->quota ?? 250)
+            );
 
-            return $this->ok(['email' => $email, 'message' => 'Account created'], 201);
+            return $this->ok($result, 201);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -549,14 +600,10 @@ class V1Controller extends Controller
         $request->validate(['email' => 'required|email']);
 
         try {
-            [$username, $domain] = explode('@', $request->email);
-            DB::connection('mysql')->table('email_accounts')
-                ->where('domain', $domain)->where('username', $username)->delete();
+            $account = $this->accountForMailbox($request->email);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
 
-            // Remove maildir
-            Process::run("rm -rf /var/vmail/{$domain}/{$username}");
-
-            return $this->ok(['message' => 'Account deleted']);
+            return $this->ok((new EmailService())->deleteMailbox($request->email));
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -569,15 +616,10 @@ class V1Controller extends Controller
         $request->validate(['email' => 'required|email', 'password' => 'required|string|min:6']);
 
         try {
-            [$username, $domain] = explode('@', $request->email);
-            $result = Process::run("doveadm pw -s SHA512-CRYPT -p '{$request->password}' 2>/dev/null");
-            $hash = trim($result->output());
+            $account = $this->accountForMailbox($request->email);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
 
-            DB::connection('mysql')->table('email_accounts')
-                ->where('domain', $domain)->where('username', $username)
-                ->update(['password' => $hash, 'updated_at' => now()]);
-
-            return $this->ok(['message' => 'Password changed']);
+            return $this->ok((new EmailService())->changeMailboxPassword($request->email, $request->password));
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -587,21 +629,183 @@ class V1Controller extends Controller
     {
         if ($r = $this->scope($request, 'email:manage')) return $r;
 
-        $query = DB::connection('mysql')->table('email_accounts');
-        if ($request->domain) {
-            $query->where('domain', $request->domain);
+        try {
+            $service = new EmailService();
+            $account = null;
+            if ($request->domain) {
+                $account = $service->accountForDomain($request->domain);
+                if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
+            }
+            return $this->ok(['accounts' => $service->listMailboxes($account)]);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
         }
-        $accounts = $query->select('id', 'domain', 'username', 'quota', 'created_at')->get();
-        return $this->ok(['accounts' => $accounts]);
+    }
+
+    public function emailSuspend(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate(['email' => 'required|email']);
+
+        try {
+            $account = $this->accountForMailbox($request->email);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
+
+            return $this->ok((new EmailService())->suspendMailbox($request->email));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailUnsuspend(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate(['email' => 'required|email']);
+
+        try {
+            $account = $this->accountForMailbox($request->email);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
+
+            return $this->ok((new EmailService())->unsuspendMailbox($request->email));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailTestAuth(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate(['email' => 'required|email', 'password' => 'required|string']);
+
+        try {
+            $account = $this->accountForMailbox($request->email);
+            if ($guard = $this->emailAccountGuard($request, $account)) return $guard;
+
+            return $this->ok((new EmailService())->testMailboxAuth($request->email, $request->password));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailTestDelivery(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate(['from' => 'required|email', 'to' => 'required|email']);
+
+        try {
+            $fromAccount = $this->accountForMailbox($request->from);
+            $toAccount = $this->accountForMailbox($request->to);
+            if ($guard = $this->emailAccountGuard($request, $fromAccount)) return $guard;
+            if ($guard = $this->emailAccountGuard($request, $toAccount)) return $guard;
+
+            return $this->ok((new EmailService())->testLocalDelivery($request->from, $request->to));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
     }
 
     // â”€â”€â”€ Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    public function emailDeliverabilityStatus(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate([
+            'domain' => 'required|string',
+            'selector' => 'nullable|string',
+        ]);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            return $this->ok((new EmailDeliverabilityService())->status($request->domain, $request->selector ?? 'default'));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailDkimEnable(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate([
+            'domain' => 'required|string',
+            'selector' => 'nullable|string',
+            'install_dns' => 'nullable|boolean',
+        ]);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            return $this->ok((new EmailDeliverabilityService())->enableDkim(
+                $request->domain,
+                $request->selector ?? 'default',
+                $request->boolean('install_dns')
+            ));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailDeliverabilityDnsHelper(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate([
+            'domain' => 'required|string',
+            'selector' => 'nullable|string',
+            'install' => 'nullable|boolean',
+        ]);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            $service = new EmailDeliverabilityService();
+            if ($request->boolean('install')) {
+                return $this->ok($service->installDnsHelperRecords($request->domain, $request->selector ?? 'default'));
+            }
+
+            return $this->ok([
+                'domain' => $request->domain,
+                'selector' => $request->selector ?? 'default',
+                'records' => $service->dnsHelperRecords($request->domain, $request->selector ?? 'default'),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function emailDeliverabilityTestSigning(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'email:manage')) return $r;
+
+        $request->validate([
+            'from' => 'required|email',
+            'to' => 'required|email',
+        ]);
+
+        try {
+            $fromAccount = $this->accountForMailbox($request->from);
+            $toAccount = $this->accountForMailbox($request->to);
+            if ($guard = $this->emailAccountGuard($request, $fromAccount)) return $guard;
+            if ($guard = $this->emailAccountGuard($request, $toAccount)) return $guard;
+
+            return $this->ok((new EmailDeliverabilityService())->testSigning($request->from, $request->to));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
 
     public function dbCreate(Request $request): JsonResponse
     {
         if ($r = $this->scope($request, 'database:manage')) return $r;
 
-        $request->validate(['name' => 'required|string']);
+        $request->validate([
+            'name' => 'required|string|regex:/^[A-Za-z0-9_]{1,64}$/',
+            'username' => 'nullable|string|regex:/^[A-Za-z0-9_]{1,64}$/',
+            'password' => 'nullable|string|min:8',
+        ]);
 
         try {
             \App\Services\MysqlService::createDatabase($request->name);
@@ -622,9 +826,9 @@ class V1Controller extends Controller
         if ($r = $this->scope($request, 'database:manage')) return $r;
 
         $request->validate([
-            'username' => 'required|string',
-            'password' => 'required|string|min:6',
-            'database' => 'required|string',
+            'username' => 'required|string|regex:/^[A-Za-z0-9_]{1,64}$/',
+            'password' => 'required|string|min:8',
+            'database' => 'required|string|regex:/^[A-Za-z0-9_]{1,64}$/',
         ]);
 
         try {
@@ -640,7 +844,7 @@ class V1Controller extends Controller
     {
         if ($r = $this->scope($request, 'database:manage')) return $r;
 
-        $request->validate(['name' => 'required|string']);
+        $request->validate(['name' => 'required|string|regex:/^[A-Za-z0-9_]{1,64}$/']);
 
         try {
             \App\Services\MysqlService::dropDatabase($request->name);
@@ -662,20 +866,32 @@ class V1Controller extends Controller
         }
     }
 
+    public function phpMyAdminStatus(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'database:manage')) return $r;
+
+        return $this->ok(['phpmyadmin' => PhpMyAdminService::status()]);
+    }
+
     // â”€â”€â”€ SSL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public function sslIssue(Request $request): JsonResponse
     {
         if ($r = $this->scope($request, 'ssl:manage')) return $r;
 
-        $request->validate(['domain' => 'required|string']);
+        $request->validate([
+            'domain' => 'required|string',
+            'email' => 'nullable|email',
+            'redirect_https' => 'nullable|boolean',
+        ]);
 
         try {
-            $result = Process::run("certbot certonly --webroot -w /home/*/public_html -d {$request->domain} --non-interactive --agree-tos --register-unsafely-without-email 2>&1");
-            if ($result->failed()) {
-                return $this->fail('SSL issuance failed: ' . $result->errorOutput());
-            }
-            return $this->ok(['message' => "SSL issued for {$request->domain}"]);
+            $result = (new DomainSslService())->issue(
+                $request->domain,
+                $request->email,
+                $request->boolean('redirect_https')
+            );
+            return $this->ok($result);
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -685,11 +901,33 @@ class V1Controller extends Controller
     {
         if ($r = $this->scope($request, 'ssl:manage')) return $r;
 
-        $request->validate(['domain' => 'required|string']);
+        $request->validate([
+            'domain' => 'required|string',
+            'redirect_https' => 'nullable|boolean',
+        ]);
 
         try {
-            $result = Process::run("certbot renew --cert-name {$request->domain} 2>&1");
-            return $this->ok(['message' => "Renewal attempted for {$request->domain}", 'output' => $result->output()]);
+            $result = (new DomainSslService())->renew(
+                $request->domain,
+                $request->has('redirect_https') ? $request->boolean('redirect_https') : null
+            );
+            return $this->ok($result);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function sslForceHttps(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'ssl:manage')) return $r;
+
+        $request->validate([
+            'domain' => 'required|string',
+            'force_https' => 'required|boolean',
+        ]);
+
+        try {
+            return $this->ok((new DomainSslService())->setForceHttps($request->domain, $request->boolean('force_https')));
         } catch (\Throwable $e) {
             return $this->fail($e->getMessage());
         }
@@ -702,19 +940,77 @@ class V1Controller extends Controller
         $domain = $request->domain;
         if (!$domain) return $this->fail('domain required');
 
-        $certPath = "/etc/letsencrypt/live/{$domain}/fullchain.pem";
-        if (!file_exists($certPath)) {
-            return $this->ok(['domain' => $domain, 'has_ssl' => false]);
+        try {
+            return $this->ok((new DomainSslService())->status($domain));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
         }
+    }
 
-        $cert = openssl_x509_parse(file_get_contents($certPath));
-        return $this->ok([
-            'domain' => $domain,
-            'has_ssl' => true,
-            'issuer' => $cert['issuer']['O'] ?? 'Unknown',
-            'valid_from' => date('Y-m-d', $cert['validFrom_time_t']),
-            'valid_to' => date('Y-m-d', $cert['validTo_time_t']),
+    public function varnishStatus(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'varnish:manage')) return $r;
+
+        $domain = $request->query('domain', $request->domain);
+        if (!$domain) return $this->fail('domain required');
+
+        try {
+            if ($guard = $this->domainGuard($request, $domain)) return $guard;
+            return $this->ok((new VarnishDomainService())->status($domain));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function varnishMode(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'varnish:manage')) return $r;
+
+        $request->validate([
+            'domain' => 'required|string',
+            'varnish_enabled' => 'nullable|boolean',
+            'varnish_mode' => 'nullable|in:bypass,shield,cache',
+            'static_asset_mode' => 'nullable|in:nginx_direct,varnish_cached',
+            'html_ttl' => 'nullable|integer|min:0|max:86400',
+            'static_ttl' => 'nullable|integer|min:60|max:31536000',
+            'grace_ttl' => 'nullable|integer|min:0|max:86400',
+            'purge_enabled' => 'nullable|boolean',
         ]);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            return $this->ok((new VarnishDomainService())->configure($request->domain, $request->all()));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function varnishPurge(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'varnish:manage')) return $r;
+
+        $request->validate(['domain' => 'required|string']);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            return $this->ok((new VarnishDomainService())->purge($request->domain));
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
+    }
+
+    public function varnishTest(Request $request): JsonResponse
+    {
+        if ($r = $this->scope($request, 'varnish:manage')) return $r;
+
+        $request->validate(['domain' => 'required|string']);
+
+        try {
+            if ($guard = $this->domainGuard($request, $request->domain)) return $guard;
+            return $this->ok(['test' => (new VarnishDomainService())->test($request->domain)]);
+        } catch (\Throwable $e) {
+            return $this->fail($e->getMessage());
+        }
     }
 
     // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -741,5 +1037,60 @@ class V1Controller extends Controller
         }
 
         return null;
+    }
+
+    private function accountForMailbox(string $email): object
+    {
+        $mailbox = DB::table('email_accounts')->where('email', strtolower(trim($email)))->whereNull('deleted_at')->first();
+        if (!$mailbox) {
+            throw new \RuntimeException('Mailbox not found.');
+        }
+
+        $account = DB::table('accounts')->where('id', $mailbox->account_id)->first();
+        if (!$account) {
+            throw new \RuntimeException('Mailbox hosting account not found.');
+        }
+
+        return $account;
+    }
+
+    private function domainGuard(Request $request, string $domain): ?JsonResponse
+    {
+        $token = $this->token($request);
+        if (!$token->isReseller()) {
+            return null;
+        }
+
+        $domain = strtolower(trim(preg_replace('#^https?://#', '', $domain), "/ \t\n\r\0\x0B."));
+        $account = DB::connection('mysql')->table('accounts')->where('domain', $domain)->first();
+        if (!$account) {
+            return null;
+        }
+
+        if (!property_exists($account, 'reseller') || empty($account->reseller)) {
+            return $this->fail('Reseller ownership is not configured for this account', 403);
+        }
+
+        if ($account->reseller !== $token->reseller_username) {
+            return $this->fail('Cannot manage domain belonging to another reseller', 403);
+        }
+
+        return null;
+    }
+
+    private function emailAccountGuard(Request $request, object $account): ?JsonResponse
+    {
+        $token = $this->token($request);
+        if (!$token->isReseller()) {
+            return null;
+        }
+
+        if (!property_exists($account, 'reseller') || empty($account->reseller)) {
+            return $this->fail('Reseller ownership is not configured for this account', 403);
+        }
+
+        return $account->reseller === $token->reseller_username
+            ? null
+            : $this->fail('Cannot manage mailbox belonging to another reseller', 403);
     }
 }

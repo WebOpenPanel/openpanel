@@ -59,7 +59,8 @@ class FtpController extends Controller
     public function configuration()
     {
         $conf = FtpService::getConf();
-        return view('ftp.config', compact('conf'));
+        $status = FtpService::getStatus();
+        return view('ftp.config', compact('conf', 'status'));
     }
 
     public function saveConfig(Request $request)

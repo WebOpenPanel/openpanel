@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\UserPanel;
 
 use App\Http\Controllers\Controller;
-use App\Services\ShellService;
+use App\Services\EmailService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -22,14 +22,14 @@ class UserEmailController extends Controller
 
     protected function domains()
     {
-        $id = $this->accountId();
-        return $id ? DB::table('domains')->where('user_account_id', $id)->pluck('domain') : collect();
+        $account = DB::table('accounts')->where('username', $this->username())->first();
+        return $account ? collect([$account->domain]) : collect();
     }
 
     public function index()
     {
         $id = $this->accountId();
-        $accounts = $id ? DB::table('email_accounts')->where('user_account_id', $id)->get() : collect();
+        $accounts = $id ? DB::table('email_accounts')->where('account_id', $id)->whereNull('deleted_at')->get() : collect();
         $domains = $this->domains();
         return view('user-panel.email.index', compact('accounts', 'domains'));
     }
@@ -53,42 +53,25 @@ class UserEmailController extends Controller
     public function createAccount(Request $request)
     {
         $request->validate([
-            'email' => 'required|string',
+            'local_part' => 'required|string',
+            'domain' => 'required|string',
             'password' => 'required|string|min:6',
             'quota' => 'integer|min:0',
         ]);
-
-        $email = $request->email;
-        $parts = explode('@', $email);
-        $domain = $parts[1] ?? '';
 
         $id = $this->accountId();
         if (!$id) {
             return back()->with('error', 'Account not found.');
         }
 
-        $domainCheck = DB::table('domains')
-            ->where('user_account_id', $id)
-            ->where('domain', $domain)
-            ->exists();
-
-        if (!$domainCheck) {
+        $account = DB::table('accounts')->where('id', $id)->first();
+        if (!$account || $account->domain !== $request->domain) {
             return back()->with('error', 'Domain not found or not owned by you.');
         }
 
-        $passwordHash = password_hash($request->password, PASSWORD_DEFAULT);
-        DB::table('email_accounts')->insert([
-            'user_account_id' => $id,
-            'domain' => $domain,
-            'email' => $email,
-            'password_hash' => $passwordHash,
-            'quota_mb' => $request->quota ?? 250,
-            'status' => 'active',
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        $result = (new EmailService())->createMailbox($account, $request->domain, $request->local_part, $request->password, $request->quota ?? 250);
 
-        return back()->with('success', "Email account {$email} created.");
+        return back()->with('success', "Email account {$result['email']} created.");
     }
 
     public function deleteAccount(Request $request)
@@ -97,7 +80,10 @@ class UserEmailController extends Controller
         $id = $this->accountId();
         if (!$id) return back()->with('error', 'Account not found.');
 
-        DB::table('email_accounts')->where('id', $request->id)->where('user_account_id', $id)->delete();
+        $mailbox = DB::table('email_accounts')->where('id', $request->id)->where('account_id', $id)->whereNull('deleted_at')->first();
+        if (!$mailbox) return back()->with('error', 'Mailbox not found.');
+
+        (new EmailService())->deleteMailbox($mailbox->email);
         return back()->with('success', 'Email account deleted.');
     }
 }

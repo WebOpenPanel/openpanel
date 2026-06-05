@@ -5,6 +5,7 @@ namespace App\Http\Controllers\UserPanel;
 use App\Http\Controllers\Controller;
 use App\Services\ShellService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class UserDashboardController extends Controller
 {
@@ -21,7 +22,8 @@ class UserDashboardController extends Controller
         $package = $account;
 
         $domains = $accountId ? DB::table('domains')->where('user_account_id', $accountId)->count() : 0;
-        $databases = $accountId ? DB::table('mysql_databases')->where('user_account_id', $accountId)->count() : 0;
+        $databaseColumn = Schema::hasColumn('mysql_databases', 'account_id') ? 'account_id' : 'user_account_id';
+        $databases = $accountId ? DB::table('mysql_databases')->where($databaseColumn, $accountId)->count() : 0;
         $emailAccounts = $accountId ? DB::table('email_accounts')->where('user_account_id', $accountId)->count() : 0;
         $ftpAccounts = $accountId ? DB::table('ftp_accounts')->where('user_account_id', $accountId)->count() : 0;
 
