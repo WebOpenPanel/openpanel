@@ -21,7 +21,7 @@
                     @forelse($accounts as $account)
                         <tr class="hover:bg-gray-50">
                             <td class="px-6 py-4 text-sm font-medium text-gray-800">{{ $account->email }}</td>
-                            <td class="px-6 py-4 text-sm text-gray-600">{{ $account->quota ?? 'Unlimited' }} MB</td>
+                            <td class="px-6 py-4 text-sm text-gray-600">{{ $account->quota_mb ?? 'Unlimited' }} MB</td>
                             <td class="px-6 py-4 space-x-3">
                                 <form method="POST" action="{{ route('user.email.delete') }}" class="inline" onsubmit="return confirm('Delete this email account?')">
                                     @csrf
@@ -43,8 +43,8 @@
         <form method="POST" action="{{ route('user.email.create') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             @csrf
             <div class="flex">
-                <input type="text" name="email" placeholder="user" class="flex-1 px-3 py-2 border border-gray-300 rounded-l-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" required>
-                <select class="px-3 py-2 border border-l-0 border-gray-300 rounded-r-lg" disabled>
+                <input type="text" name="local_part" placeholder="user" class="flex-1 px-3 py-2 border border-gray-300 rounded-l-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500" required>
+                <select name="domain" class="px-3 py-2 border border-l-0 border-gray-300 rounded-r-lg">
                     @foreach($domains as $d)
                         <option>{{ $d }}</option>
                     @endforeach
@@ -54,6 +54,9 @@
             <input type="number" name="quota" placeholder="Quota (MB)" value="250" class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
             <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">Create Account</button>
         </form>
+        <div class="mt-4 text-sm text-gray-600">
+            IMAP: port 143. SMTP submission: port 587 with authentication. Username is the full email address.
+        </div>
     </div>
 </div>
 @endsection

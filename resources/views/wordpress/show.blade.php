@@ -245,6 +245,23 @@
                         <button type="submit" class="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200" onclick="return confirm('Create staging site at staging.{{ $site->domain }}?')">Create</button>
                     </form>
                 </div>
+                @foreach(($stagingSites ?? collect()) as $staging)
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">{{ $staging->domain }}</span>
+                        <div class="flex gap-2">
+                            <form method="POST" action="{{ route('wordpress.push-staging', $site->id) }}">
+                                @csrf
+                                <input type="hidden" name="staging_domain" value="{{ $staging->domain }}">
+                                <button type="submit" class="px-3 py-1 text-xs bg-amber-100 text-amber-700 rounded hover:bg-amber-200" onclick="return confirm('Push staging to live? A pre-push backup will be created.')">Push</button>
+                            </form>
+                            <form method="POST" action="{{ route('wordpress.delete-staging', $site->id) }}">
+                                @csrf
+                                <input type="hidden" name="staging_domain" value="{{ $staging->domain }}">
+                                <button type="submit" class="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200" onclick="return confirm('Delete staging site {{ $staging->domain }}?')">Delete</button>
+                            </form>
+                        </div>
+                    </div>
+                @endforeach
             </div>
         </div>
     </div>

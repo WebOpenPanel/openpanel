@@ -8,6 +8,15 @@
         <a href="{{ route('ftp.config') }}" class="px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Config</a>
     </div>
     <div class="bg-white rounded-xl shadow-sm border p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-lock mr-2 text-indigo-500"></i>FTPS Status</h3>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+            <div><span class="text-gray-500">Service</span><div class="font-semibold">{{ $status['active'] ? 'active' : 'inactive' }}</div></div>
+            <div><span class="text-gray-500">Explicit FTPS</span><div class="font-semibold">{{ $status['ftps_enabled'] ? 'enabled' : 'disabled' }}</div></div>
+            <div><span class="text-gray-500">TLS mode</span><div class="font-semibold">{{ $status['tls_mode'] ?? '0' }}</div></div>
+            <div><span class="text-gray-500">Passive range</span><div class="font-semibold">{{ $status['passive_range'] ?: 'not configured' }}</div></div>
+        </div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border p-5">
         <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-file-import mr-2 text-indigo-500"></i>Add FTP Account</h3>
         <form method="POST" action="{{ route('ftp.create') }}" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             @csrf

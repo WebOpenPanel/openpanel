@@ -83,7 +83,7 @@
                                 @if($components[$comp] ?? false)
                                     <span class="px-1.5 py-0.5 bg-green-50 text-green-600 rounded text-xs">{{ $comp }}</span>
                                 @else
-                                    <span class="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-xs">{{ $comp }} ✗</span>
+                                    <span class="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-xs">{{ $comp }} FAIL</span>
                                 @endif
                             @endif
                         @endforeach
@@ -143,7 +143,7 @@
         <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-vial mr-2 text-blue-500"></i>Test Domain</h3>
         <form method="POST" action="{{ route('web-stack.test-domain') }}" class="flex gap-2" x-on:submit.prevent="testDomain">
             @csrf
-            <input type="text" name="domain" x-model="testDomainName" placeholder="test.kha.icu" class="flex-1 px-3 py-2 border rounded-lg text-sm" required>
+            <input type="text" name="domain" x-model="testDomainName" placeholder="example.com" class="flex-1 px-3 py-2 border rounded-lg text-sm" required>
             <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Test</button>
         </form>
         <div x-show="testResult" class="mt-2 text-sm" x-html="testResult"></div>
@@ -188,7 +188,7 @@
 <script>
 function webStackManager() {
     return {
-        testDomainName: 'test.kha.icu',
+        testDomainName: 'example.com',
         testResult: '',
         async testDomain() {
             const form = new URLSearchParams();
@@ -202,9 +202,9 @@ function webStackManager() {
                 });
                 const data = await res.json();
                 if (data.success) {
-                    this.testResult = `<span class="text-green-600">✓ ${data.domain} → HTTP ${data.http_code} on port ${data.port}</span>`;
+                    this.testResult = `<span class="text-green-600">OK ${data.domain} -> HTTP ${data.http_code} on port ${data.port}</span>`;
                 } else {
-                    this.testResult = `<span class="text-red-600">✗ ${data.domain} → HTTP ${data.http_code}</span>`;
+                    this.testResult = `<span class="text-red-600">FAIL ${data.domain} -> HTTP ${data.http_code}</span>`;
                 }
             } catch (e) {
                 this.testResult = `<span class="text-red-600">Error: ${e.message}</span>`;

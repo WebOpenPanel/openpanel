@@ -15,6 +15,11 @@
                 <div><label class="block text-sm font-medium text-gray-700 mb-1">Domain</label><input type="text" name="domain" class="w-full px-3 py-2 border rounded-lg text-sm" required></div>
                 <div><label class="block text-sm font-medium text-gray-700 mb-1">Email</label><input type="email" name="email" class="w-full px-3 py-2 border rounded-lg text-sm"></div>
             </div>
+            <input type="hidden" name="force_https" value="0">
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" name="force_https" value="1" checked class="rounded border-gray-300 text-green-600 focus:ring-green-500">
+                Force HTTPS after certificate installation
+            </label>
             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">Issue Certificate</button>
         </form>
     </div>

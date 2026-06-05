@@ -7,6 +7,15 @@
         <a href="{{ route('ftp.config') }}" class="px-3 py-1.5 text-sm font-medium bg-indigo-100 text-indigo-700 rounded-lg">Config</a>
     </div>
     <div class="bg-white rounded-xl shadow-sm border p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-lock mr-2 text-indigo-500"></i>FTPS</h3>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+            <div><span class="text-gray-500">Explicit FTPS</span><div class="font-semibold">{{ $status['ftps_enabled'] ? 'enabled' : 'disabled' }}</div></div>
+            <div><span class="text-gray-500">Cert exists</span><div class="font-semibold">{{ $status['cert_exists'] ? 'yes' : 'no' }}</div></div>
+            <div><span class="text-gray-500">Cert file</span><div class="font-mono text-xs break-all">{{ $status['cert_file'] }}</div></div>
+            <div><span class="text-gray-500">Passive range</span><div class="font-semibold">{{ $status['passive_range'] ?: 'not configured' }}</div></div>
+        </div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border p-5">
         <h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-cog mr-2 text-indigo-500"></i>pure-ftpd.conf</h3>
         <form method="POST" action="{{ route('ftp.save-config') }}" class="space-y-3">
             @csrf

@@ -13,7 +13,7 @@
         <form method="POST" action="{{ route('email.create-account') }}" class="flex flex-wrap items-end gap-3">
             @csrf
             <div><label class="text-xs text-gray-500">Account</label>
-                <select name="user_account_id" required class="block px-3 py-2 border rounded-lg text-sm w-48">
+                <select name="account_id" required class="block px-3 py-2 border rounded-lg text-sm w-48">
                     <option value="">Select</option>@foreach($accounts as $a)<option value="{{ $a->id }}">{{ $a->domain }}</option>@endforeach
                 </select></div>
             <div><label class="text-xs text-gray-500">Email Prefix</label>
@@ -41,7 +41,7 @@
                 @forelse($emailAccounts as $ea)
                 <tr class="hover:bg-gray-50">
                     <td class="px-5 py-2.5 text-sm font-medium text-gray-800">{{ $ea->email }}</td>
-                    <td class="px-5 py-2.5 text-sm text-gray-600">{{ $ea->userAccount->domain ?? '-' }}</td>
+                    <td class="px-5 py-2.5 text-sm text-gray-600">{{ $ea->domain }}</td>
                     <td class="px-5 py-2.5 text-sm text-gray-600">{{ $ea->quota_mb }} MB</td>
                     <td class="px-5 py-2.5"><span class="px-2 py-0.5 text-xs {{ $ea->status=='active'?'bg-green-100 text-green-800':'bg-red-100 text-red-800' }} rounded-full">{{ $ea->status }}</span></td>
                     <td class="px-5 py-2.5 text-right">

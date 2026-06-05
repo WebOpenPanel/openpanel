@@ -8,9 +8,13 @@
         <i class="fas fa-database text-orange-600 text-2xl"></i>
     </div>
     <h3 class="text-lg font-semibold text-gray-800 mb-2">phpMyAdmin</h3>
-    <p class="text-gray-600 mb-6">Access phpMyAdmin to manage your databases directly.</p>
-    <a href="{{ $pmaUrl }}" target="_blank" class="inline-flex items-center px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors">
-        <i class="fas fa-external-link-alt mr-2"></i>Open phpMyAdmin
-    </a>
+    @if($pmaStatus['installed'] ?? false)
+        <p class="text-gray-600 mb-6">Use a MySQL user created in OpenPanel. Access is limited by that user's database grants.</p>
+        <a href="{{ $pmaUrl }}" target="_blank" class="inline-flex items-center px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors">
+            <i class="fas fa-external-link-alt mr-2"></i>Open phpMyAdmin
+        </a>
+    @else
+        <p class="text-gray-600 mb-6">phpMyAdmin is not installed on this server.</p>
+    @endif
 </div>
 @endsection
