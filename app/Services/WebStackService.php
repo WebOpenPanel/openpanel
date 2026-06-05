@@ -351,25 +351,89 @@ class WebStackService
         ];
     }
 
-    public function generateVhostForDomain(string $stack, string $username, string $domain, string $home): void
+    public function generateVhostForDomain(string $stack, string $username, string $domain, string $home, ?string $documentRoot = null): void
     {
         switch ($stack) {
             case 'nginx_phpfpm':
-                $this->generateNginxPhpfpmVhost($username, $domain, $home);
+                $this->generateNginxPhpfpmVhost($username, $domain, $home, $documentRoot);
                 break;
             case 'apache_phpfpm':
-                $this->generateApachePhpfpmVhost($username, $domain, $home);
+                $this->generateApachePhpfpmVhost($username, $domain, $home, 80, $documentRoot);
                 break;
             case 'nginx_apache':
-                $this->generateApachePhpfpmVhost($username, $domain, $home, 8080);
-                $this->generateNginxProxyVhost($username, $domain, $home, 8080);
+                $this->generateApachePhpfpmVhost($username, $domain, $home, 8080, $documentRoot);
+                $this->generateNginxProxyVhost($username, $domain, $home, 8080, $documentRoot);
                 break;
             case 'nginx_varnish_apache':
-                $this->generateApachePhpfpmVhost($username, $domain, $home, 8080);
-                $this->generateVarnishVhost($username, $domain, 8080);
-                $this->generateNginxProxyVhost($username, $domain, $home, 6081);
+                $this->generateApachePhpfpmVhost($username, $domain, $home, 8080, $documentRoot);
+                $this->generateVarnishVhost($username, $domain, 8080, $documentRoot !== null);
+                $this->generateNginxProxyVhost($username, $domain, $home, 6081, $documentRoot);
                 break;
         }
+    }
+
+    public function removeDomainScopedVhost(string $stack, string $username, string $domain): void
+    {
+        $name = $this->domainScopedConfigName($username, $domain);
+        Process::run("sudo rm -f " . escapeshellarg("/etc/nginx/conf.d/users/{$name}.conf"));
+
+        if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'], true)) {
+            Process::run("sudo rm -f " . escapeshellarg("/etc/httpd/conf.d/users/{$name}.conf"));
+        }
+
+        if ($stack === 'nginx_varnish_apache') {
+            Process::run("sudo rm -f " . escapeshellarg("/etc/varnish/conf.d/users/{$name}.vcl"));
+            $this->ensureVarnishDefaultVcl();
+            $this->rebuildVarnishUserIncludes();
+            $this->validateAndReloadVarnish();
+        }
+
+        $nginx = Process::run('sudo nginx -t 2>&1');
+        if ($nginx->failed()) {
+            throw new \RuntimeException('nginx config validation failed after vhost removal: ' . trim($nginx->output() ?: $nginx->errorOutput()));
+        }
+        Process::run('sudo systemctl reload nginx 2>/dev/null');
+
+        if (in_array($stack, ['apache_phpfpm', 'nginx_apache', 'nginx_varnish_apache'], true)) {
+            $apache = Process::run('sudo apachectl -t 2>&1');
+            if ($apache->failed()) {
+                throw new \RuntimeException('Apache config validation failed after vhost removal: ' . trim($apache->output() ?: $apache->errorOutput()));
+            }
+            Process::run('sudo systemctl reload httpd 2>/dev/null');
+        }
+    }
+
+    protected function domainScopedConfigName(string $username, string $domain): string
+    {
+        $safeDomain = preg_replace('/[^A-Za-z0-9_.-]/', '_', $domain);
+        return "{$username}-{$safeDomain}";
+    }
+
+    public function refreshVarnishDomain(string $domain): array
+    {
+        $account = DB::connection('mysql')->table('accounts')->where('domain', $domain)->first();
+        if (!$account) {
+            throw new \RuntimeException("Account for domain '{$domain}' not found.");
+        }
+
+        $home = "/home/{$account->username}";
+        $this->generateVarnishVhost($account->username, $domain, 8080);
+        $this->generateNginxProxyVhost($account->username, $domain, $home, 6081);
+
+        $test = Process::run('sudo nginx -t 2>&1');
+        if ($test->failed()) {
+            throw new \RuntimeException('nginx config validation failed: ' . trim($test->output() ?: $test->errorOutput()));
+        }
+
+        Process::run('sudo systemctl reload nginx 2>/dev/null');
+
+        return [
+            'success' => true,
+            'domain' => $domain,
+            'username' => $account->username,
+            'nginx_reload_status' => 'reloaded',
+            'varnish_reload_status' => 'reloaded',
+        ];
     }
 
     public function removeVhostForDomain(string $stack, string $username, string $domain): void
@@ -389,6 +453,9 @@ class WebStackService
                 Process::run("sudo rm -f /etc/nginx/conf.d/users/{$username}.conf");
                 Process::run("sudo rm -f /etc/httpd/conf.d/users/{$username}.conf");
                 Process::run("sudo rm -f /etc/varnish/conf.d/users/{$username}.vcl");
+                $this->ensureVarnishDefaultVcl();
+                $this->rebuildVarnishUserIncludes();
+                $this->validateAndReloadVarnish();
                 break;
         }
     }
@@ -422,11 +489,18 @@ class WebStackService
 
         // 2. Write nginx 403 vhost to conf.d/ directly (always included)
         //    This uses specific server_name which takes priority over catch-all server_name _
-        $certPath = '/etc/pki/tls/certs/openpanel.crt';
-        $keyPath = '/etc/pki/tls/private/openpanel.key';
+        $domainCert = null;
+        try {
+            $domainCert = (new DomainSslService())->certificatePathsForDomain($domain);
+        } catch (\Throwable $e) {
+            $domainCert = null;
+        }
+
+        $certPath = $domainCert['cert'] ?? '/etc/pki/tls/certs/openpanel.crt';
+        $keyPath = $domainCert['key'] ?? '/etc/pki/tls/private/openpanel.key';
 
         $sslBlock = '';
-        if (file_exists($certPath) && file_exists($keyPath)) {
+        if ($domainCert || (file_exists($certPath) && file_exists($keyPath))) {
             $sslBlock = <<<NGINX
 
 server {
@@ -435,6 +509,8 @@ server {
     server_name {$domain} www.{$domain};
     ssl_certificate {$certPath};
     ssl_certificate_key {$keyPath};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
     return 403;
 }
 NGINX;
@@ -635,15 +711,17 @@ APACHE;
         return true;
     }
 
-    protected function generateNginxPhpfpmVhost(string $username, string $domain, string $home): void
+    protected function generateNginxPhpfpmVhost(string $username, string $domain, string $home, ?string $documentRoot = null): void
     {
+        $docroot = $documentRoot ?: "{$home}/public_html";
+        $configName = $documentRoot ? $this->domainScopedConfigName($username, $domain) : $username;
         $vhost = <<<NGINX
 server {
     listen 80;
     listen [::]:80;
     server_name {$domain} www.{$domain};
 
-    root {$home}/public_html;
+    root {$docroot};
     index index.html index.htm index.php;
 
     access_log {$home}/logs/nginx/access.log;
@@ -652,7 +730,7 @@ server {
     client_max_body_size 64M;
 
     # Symlink protection: only follow symlinks owned by the target user
-    disable_symlinks if_not_owner from={$home}/public_html;
+    disable_symlinks if_not_owner from={$docroot};
 
     # Security headers
     add_header X-Content-Type-Options nosniff always;
@@ -687,22 +765,41 @@ server {
 NGINX;
 
         Process::run("sudo mkdir -p /etc/nginx/conf.d/users");
+        $path = "/etc/nginx/conf.d/users/{$configName}.conf";
+        $backup = "{$path}.bak." . date('YmdHis');
+        if (file_exists($path)) {
+            Process::run("sudo cp " . escapeshellarg($path) . " " . escapeshellarg($backup));
+        }
+
         $tmp = tempnam(sys_get_temp_dir(), 'ngx');
         file_put_contents($tmp, $vhost);
-        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/nginx/conf.d/users/{$username}.conf");
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($path));
+        Process::run("sudo chmod 0644 " . escapeshellarg($path));
         @unlink($tmp);
+
+        $test = Process::run("sudo nginx -t 2>&1");
+        if ($test->failed()) {
+            if (file_exists($backup)) {
+                Process::run("sudo cp " . escapeshellarg($backup) . " " . escapeshellarg($path));
+            } else {
+                Process::run("sudo rm -f " . escapeshellarg($path));
+            }
+            throw new \RuntimeException('nginx proxy vhost validation failed: ' . trim($test->output() ?: $test->errorOutput()));
+        }
     }
 
-    protected function generateApachePhpfpmVhost(string $username, string $domain, string $home, int $port = 80): void
+    protected function generateApachePhpfpmVhost(string $username, string $domain, string $home, int $port = 80, ?string $documentRoot = null): void
     {
+        $docroot = $documentRoot ?: "{$home}/public_html";
+        $configName = $documentRoot ? $this->domainScopedConfigName($username, $domain) : $username;
         $vhost = <<<APACHE
 <VirtualHost *:{$port}>
     ServerName {$domain}
     ServerAlias www.{$domain}
-    DocumentRoot {$home}/public_html
+    DocumentRoot {$docroot}
 
     # Symlink protection: only follow symlinks owned by the same user
-    <Directory {$home}/public_html>
+    <Directory {$docroot}>
         AllowOverride All
         Require all granted
         Options -Indexes +SymLinksIfOwnerMatch
@@ -740,17 +837,27 @@ APACHE;
         Process::run("sudo mkdir -p /etc/httpd/conf.d/users");
         $tmp = tempnam(sys_get_temp_dir(), 'apa');
         file_put_contents($tmp, $vhost);
-        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/httpd/conf.d/users/{$username}.conf");
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg("/etc/httpd/conf.d/users/{$configName}.conf"));
         @unlink($tmp);
     }
 
-    protected function generateNginxProxyVhost(string $username, string $domain, string $home, int $backendPort): void
+    protected function generateNginxProxyVhost(string $username, string $domain, string $home, int $backendPort, ?string $documentRoot = null): void
     {
+        $docroot = $documentRoot ?: "{$home}/public_html";
+        $configName = $documentRoot ? $this->domainScopedConfigName($username, $domain) : $username;
+        $settings = (new VarnishDomainService())->settings($domain);
+        $staticDirect = $backendPort === 6081 && ($settings['static_asset_mode'] ?? 'nginx_direct') === 'nginx_direct';
+        $proxyBlock = $this->nginxProxyBlock($backendPort);
+        $staticBlock = $staticDirect ? $this->nginxStaticDirectBlock((int) $settings['static_ttl']) : '';
+        $fallbackLocation = $staticDirect ? "location @openpanel_backend {\n{$proxyBlock}\n    }" : '';
+        $rootLine = $staticDirect ? "\n    root {$docroot};\n    index index.html index.htm index.php;\n    disable_symlinks if_not_owner from={$docroot};\n" : '';
+
         $vhost = <<<NGINX
 server {
     listen 80;
     listen [::]:80;
     server_name {$domain} www.{$domain};
+    {$rootLine}
 
     access_log {$home}/logs/nginx/access.log;
     error_log {$home}/logs/nginx/error.log;
@@ -762,7 +869,190 @@ server {
     add_header X-Frame-Options SAMEORIGIN always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
 
+    location ^~ /.well-known/acme-challenge/ {
+        root {$docroot};
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    location ~ /\.(?!well-known).* { deny all; }
+    location ~* (^|/)(wp-config\.php|\.env|composer\.(json|lock)|package(-lock)?\.json)\$ { deny all; }
+    location ~* \.(env|bak|sql|log|conf|ini|sh|py)\$ { deny all; }
+    location ~ ^/(private|backups|logs|\.openpanel)/ { deny all; }
+
+    {$staticBlock}
+
     location / {
+{$proxyBlock}
+    }
+
+    {$fallbackLocation}
+}
+NGINX;
+
+        Process::run("sudo mkdir -p /etc/nginx/conf.d/users");
+        $tmp = tempnam(sys_get_temp_dir(), 'ngx');
+        file_put_contents($tmp, $vhost);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg("/etc/nginx/conf.d/users/{$configName}.conf"));
+        @unlink($tmp);
+    }
+
+    protected function generateVarnishVhost(string $username, string $domain, int $backendPort, bool $domainScoped = false): void
+    {
+        $configName = $domainScoped ? $this->domainScopedConfigName($username, $domain) : $username;
+        $settings = (new VarnishDomainService())->settings($domain);
+        $mode = (new VarnishDomainService())->effectiveMode($settings);
+        $staticViaVarnish = ($settings['static_asset_mode'] ?? 'nginx_direct') === 'varnish_cached';
+        $htmlTtl = max(0, (int) $settings['html_ttl']);
+        $staticTtl = max(60, (int) $settings['static_ttl']);
+        $graceTtl = max(0, (int) $settings['grace_ttl']);
+        $staticRecv = $staticViaVarnish
+            ? "        if (req.url ~ \"\\\\.(css|js|mjs|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm|mp3|wav|pdf|txt|xml)(\\\\?.*)?\\$\") {\n            unset req.http.Cookie;\n            return (hash);\n        }\n"
+            : '';
+        $cacheRecv = $mode === 'cache' ? 'return (hash);' : 'return (pass);';
+        $htmlBackend = $mode === 'cache' && $htmlTtl > 0
+            ? "            unset beresp.http.Pragma;\n            unset beresp.http.Expires;\n            set beresp.http.Cache-Control = \"public, max-age={$htmlTtl}\";\n            set beresp.ttl = {$htmlTtl}s;\n            set beresp.grace = {$graceTtl}s;\n            return (deliver);"
+            : "            set beresp.uncacheable = true;\n            set beresp.ttl = 0s;\n            return (deliver);";
+        $staticBackend = $staticViaVarnish
+            ? "        if (bereq.url ~ \"\\\\.(css|js|mjs|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm|mp3|wav|pdf|txt|xml)(\\\\?.*)?\\$\") {\n            unset beresp.http.Set-Cookie;\n            set beresp.http.Cache-Control = \"public, max-age={$staticTtl}\";\n            set beresp.ttl = {$staticTtl}s;\n            set beresp.grace = {$graceTtl}s;\n            return (deliver);\n        }\n"
+            : '';
+
+        $vcl = <<<VCL
+sub vcl_recv {
+    if (req.http.host == "{$domain}" || req.http.host == "www.{$domain}") {
+        set req.backend_hint = default;
+
+        if (req.method != "GET" && req.method != "HEAD") {
+            return (pass);
+        }
+        if (req.http.Authorization) {
+            return (pass);
+        }
+        if (req.url ~ "^/\\.well-known/acme-challenge/") {
+            return (pass);
+        }
+        if (req.url ~ "(?i)(^|/)(wp-admin|wp-login\\.php|wp-cron\\.php|xmlrpc\\.php)") {
+            return (pass);
+        }
+        if (req.url ~ "(?i)(/cart|/checkout|/my-account|/wc-api|add-to-cart)") {
+            return (pass);
+        }
+        if (req.url ~ "(?i)[?&](preview=true|nocache=|no_cache=|s=|add-to-cart=)") {
+            return (pass);
+        }
+{$staticRecv}
+        if (req.http.Cookie) {
+            if (req.http.Cookie ~ "(wordpress_logged_in|wp-postpass|comment_author|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session)") {
+                return (pass);
+            }
+            set req.http.Cookie = regsuball(req.http.Cookie, "(^|; )(_ga|_gid|_gat|_fbp|_fbc|wordpress_test_cookie)=[^;]*", "");
+            set req.http.Cookie = regsuball(req.http.Cookie, "^; *", "");
+            set req.http.Cookie = regsuball(req.http.Cookie, "; *;", ";");
+            set req.http.Cookie = regsuball(req.http.Cookie, "; *\$", "");
+            if (req.http.Cookie == "") {
+                unset req.http.Cookie;
+            }
+        }
+        {$cacheRecv}
+    }
+}
+
+sub vcl_backend_response {
+    if (bereq.http.host == "{$domain}" || bereq.http.host == "www.{$domain}") {
+        if (bereq.method != "GET" && bereq.method != "HEAD") {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (bereq.url ~ "^/\\.well-known/acme-challenge/") {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (bereq.url ~ "(?i)(^|/)(wp-admin|wp-login\\.php|wp-cron\\.php|xmlrpc\\.php)") {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (bereq.url ~ "(?i)(/cart|/checkout|/my-account|/wc-api|add-to-cart)") {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (beresp.http.Set-Cookie ~ "(wordpress_logged_in|wp-postpass|comment_author|woocommerce_items_in_cart|woocommerce_cart_hash|wp_woocommerce_session)") {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (beresp.http.Set-Cookie) {
+            if (beresp.http.Set-Cookie ~ "(wordpress_test_cookie|wp-settings-time)") {
+                unset beresp.http.Set-Cookie;
+            } else {
+                set beresp.uncacheable = true;
+                set beresp.ttl = 0s;
+                return (deliver);
+            }
+        }
+{$staticBackend}
+        if (beresp.status != 200 && beresp.status != 301 && beresp.status != 302) {
+            set beresp.uncacheable = true;
+            set beresp.ttl = 0s;
+            return (deliver);
+        }
+        if (beresp.http.Content-Type ~ "(?i)text/html") {
+{$htmlBackend}
+        }
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+}
+VCL;
+
+        $this->ensureVarnishDefaultVcl();
+        Process::run("sudo mkdir -p /etc/varnish/conf.d/users");
+        $path = "/etc/varnish/conf.d/users/{$configName}.vcl";
+        $backup = "{$path}.bak." . date('YmdHis');
+        if (file_exists($path)) {
+            Process::run("sudo cp " . escapeshellarg($path) . " " . escapeshellarg($backup));
+        }
+
+        $tmp = tempnam(sys_get_temp_dir(), 'vcl');
+        file_put_contents($tmp, $vcl);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($path));
+        Process::run("sudo chmod 0644 " . escapeshellarg($path));
+        @unlink($tmp);
+        $this->rebuildVarnishUserIncludes();
+        try {
+            $this->validateAndReloadVarnish();
+        } catch (\Throwable $e) {
+            if (file_exists($backup)) {
+                Process::run("sudo cp " . escapeshellarg($backup) . " " . escapeshellarg($path));
+                Process::run("sudo chmod 0644 " . escapeshellarg($path));
+            } else {
+                Process::run("sudo rm -f " . escapeshellarg($path));
+            }
+            $this->rebuildVarnishUserIncludes();
+            $this->validateAndReloadVarnish();
+            throw $e;
+        }
+    }
+
+    protected function nginxStaticDirectBlock(int $staticTtl): string
+    {
+        return <<<NGINX
+    location ~* \.(jpg|jpeg|png|gif|webp|avif|svg|ico|css|js|mjs|woff|woff2|ttf|eot|mp4|webm|mp3|wav|pdf|txt|xml)\$ {
+        try_files \$uri @openpanel_backend;
+        access_log off;
+        expires {$staticTtl}s;
+        add_header Cache-Control "public, max-age={$staticTtl}" always;
+    }
+NGINX;
+    }
+
+    protected function nginxProxyBlock(int $backendPort): string
+    {
+        return <<<NGINX
         proxy_pass http://127.0.0.1:{$backendPort};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -772,68 +1062,121 @@ server {
         proxy_pass_header Via;
         proxy_pass_header Age;
         proxy_pass_header X-Varnish;
-    }
-
-    # Block access to hidden files
-    location ~ /\.(?!well-known).* { deny all; }
-
-    # Block access to sensitive files
-    location ~* \.(env|bak|sql|log|conf|ini|sh|py)\$ { deny all; }
-
-    # Block access to sensitive paths
-    location ~ ^/(private|backups|logs|\.openpanel)/ { deny all; }
-}
 NGINX;
-
-        Process::run("sudo mkdir -p /etc/nginx/conf.d/users");
-        $tmp = tempnam(sys_get_temp_dir(), 'ngx');
-        file_put_contents($tmp, $vhost);
-        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/nginx/conf.d/users/{$username}.conf");
-        @unlink($tmp);
     }
 
-    protected function generateVarnishVhost(string $username, string $domain, int $backendPort): void
+    protected function ensureVarnishDefaultVcl(): void
     {
-        $vcl = <<<VCL
-sub vcl_recv {
-    if (req.http.host == "{$domain}" || req.http.host == "www.{$domain}") {
-        set req.backend_hint = default;
+        Process::run("sudo mkdir -p /etc/varnish/conf.d/users");
 
-        if (req.url ~ "wp-admin" || req.url ~ "wp-login.php" || req.url ~ "xmlrpc.php") {
-            return (pass);
+        $includeFile = '/etc/varnish/conf.d/openpanel-users.vcl';
+        if (!file_exists($includeFile)) {
+            $tmpInclude = tempnam(sys_get_temp_dir(), 'ovcl');
+            file_put_contents($tmpInclude, "# OpenPanel generated user VCL includes\n");
+            Process::run("sudo cp " . escapeshellarg($tmpInclude) . " " . escapeshellarg($includeFile));
+            Process::run("sudo chmod 0644 " . escapeshellarg($includeFile));
+            @unlink($tmpInclude);
         }
-        if (req.method == "POST") {
-            return (pass);
-        }
-        if (req.http.Authorization) {
-            return (pass);
-        }
-        if (req.http.Cookie ~ "wordpress_logged_in|wp-postpass|comment_author|woocommerce") {
-            return (pass);
-        }
-        return (hash);
+
+        $defaultVcl = <<<'VCL'
+vcl 4.0;
+
+backend default {
+    .host = "127.0.0.1";
+    .port = "8080";
+}
+
+include "/etc/varnish/conf.d/openpanel-users.vcl";
+
+sub vcl_recv {
+    set req.http.X-Forwarded-For = client.ip;
+    set req.http.X-Real-IP = client.ip;
+
+    if (req.method != "GET" && req.method != "HEAD") {
+        return (pass);
     }
+    if (req.http.Authorization) {
+        return (pass);
+    }
+    return (hash);
 }
 
 sub vcl_backend_response {
-    if (bereq.http.host == "{$domain}" || bereq.http.host == "www.{$domain}") {
-        if (bereq.url ~ "wp-admin" || bereq.url ~ "wp-login.php") {
-            set beresp.uncacheable = true;
-            set beresp.ttl = 0s;
-        }
-        if (beresp.http.Set-Cookie ~ "wordpress_logged_in|wp-postpass|comment_author") {
-            set beresp.uncacheable = true;
-            set beresp.ttl = 0s;
-        }
+    if (bereq.url ~ "\.(css|js|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp)(\?.*)?$") {
+        unset beresp.http.Set-Cookie;
+        set beresp.ttl = 1d;
+        set beresp.grace = 1h;
+        return (deliver);
+    }
+    if (beresp.status != 200 && beresp.status != 301 && beresp.status != 302) {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Surrogate-Control ~ "(?i)no-store") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Cache-Control ~ "(?i)(private|no-cache|no-store)") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Pragma ~ "(?i)no-cache") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    set beresp.ttl = 5m;
+    set beresp.grace = 1h;
+}
+
+sub vcl_deliver {
+    if (obj.hits > 0) {
+        set resp.http.X-Cache = "HIT";
+    } else {
+        set resp.http.X-Cache = "MISS";
     }
 }
 VCL;
 
-        Process::run("sudo mkdir -p /etc/varnish/conf.d/users");
-        $tmp = tempnam(sys_get_temp_dir(), 'vcl');
-        file_put_contents($tmp, $vcl);
-        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/varnish/conf.d/users/{$username}.vcl");
+        $tmp = tempnam(sys_get_temp_dir(), 'dvcl');
+        file_put_contents($tmp, $defaultVcl);
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/varnish/default.vcl");
+        Process::run("sudo chmod 0644 /etc/varnish/default.vcl");
         @unlink($tmp);
+    }
+
+    protected function rebuildVarnishUserIncludes(): void
+    {
+        $files = glob('/etc/varnish/conf.d/users/*.vcl') ?: [];
+        sort($files);
+
+        $lines = ["# OpenPanel generated user VCL includes"];
+        foreach ($files as $file) {
+            $escaped = addcslashes($file, "\\\"");
+            $lines[] = 'include "' . $escaped . '";';
+        }
+
+        $tmp = tempnam(sys_get_temp_dir(), 'ovcl');
+        file_put_contents($tmp, implode("\n", $lines) . "\n");
+        Process::run("sudo cp " . escapeshellarg($tmp) . " /etc/varnish/conf.d/openpanel-users.vcl");
+        Process::run("sudo chmod 0644 /etc/varnish/conf.d/openpanel-users.vcl");
+        @unlink($tmp);
+    }
+
+    protected function validateAndReloadVarnish(): void
+    {
+        $result = Process::run('sudo varnishd -C -f /etc/varnish/default.vcl >/dev/null 2>&1');
+        if ($result->failed()) {
+            Log::warning('Varnish VCL validation failed', [
+                'output' => trim($result->output() . "\n" . $result->errorOutput()),
+            ]);
+            throw new \RuntimeException('Varnish VCL validation failed');
+        }
+
+        Process::run('sudo systemctl reload varnish 2>/dev/null || sudo systemctl restart varnish 2>/dev/null');
     }
 
     protected function generateStackConfigs(string $stack): void
@@ -879,27 +1222,8 @@ VCL;
     protected function configureNginxVarnishApache(): void
     {
         $this->configureNginxApache();
-
-        $vclPath = '/etc/varnish/default.vcl';
-        if (!file_exists($vclPath)) {
-            $defaultVcl = <<<VCL
-vcl 4.0;
-
-backend default {
-    .host = "127.0.0.1";
-    .port = "8080";
-}
-
-sub vcl_recv {
-    set req.http.X-Forwarded-For = client.ip;
-}
-VCL;
-            $tmp = tempnam(sys_get_temp_dir(), 'dvcl');
-            file_put_contents($tmp, $defaultVcl);
-            Process::run("sudo cp " . escapeshellarg($tmp) . " " . escapeshellarg($vclPath));
-            @unlink($tmp);
-        }
-
+        $this->ensureVarnishDefaultVcl();
+        $this->rebuildVarnishUserIncludes();
         Process::run("systemctl enable varnish");
     }
 

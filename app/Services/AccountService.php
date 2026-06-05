@@ -59,6 +59,7 @@ class AccountService
         // Check if account exists in database
         $dbUser = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
         if ($dbUser) {
+            $user['id'] = $dbUser->id;
             $user['domain'] = $dbUser->domain;
             $user['email'] = $dbUser->email;
             $user['package'] = $dbUser->package;
@@ -374,7 +375,7 @@ class AccountService
             'logs/nginx' => '700',
             'logs/apache' => '700',
             '.ssh' => '700',
-            'mail' => '700',
+            'mail' => '711',
         ];
         foreach ($requiredDirs as $dir => $perm) {
             $fullPath = "{$home}/{$dir}";
@@ -388,6 +389,8 @@ class AccountService
         // 4. Fix ownership of all user files recursively
         Process::run("sudo chown -R {$username}:{$username} " . escapeshellarg($home));
         $result['actions'][] = 'ownership_recursion_fixed';
+
+        $this->restoreVirtualMailOwnership($user, $home, $result);
 
         // 5. Remove world-writable files in home
         $ww = Process::run("sudo find " . escapeshellarg($home) . " -type f -perm -0002 -print 2>/dev/null");
@@ -445,6 +448,38 @@ class AccountService
         }
 
         return $result;
+    }
+
+    protected function restoreVirtualMailOwnership(array $user, string $home, array &$result): void
+    {
+        $accountId = $user['id'] ?? null;
+        if (!$accountId) return;
+
+        $mailboxes = DB::connection('mysql')->table('email_accounts')
+            ->where('account_id', $accountId)
+            ->whereNull('deleted_at')
+            ->whereNotNull('mailbox_path')
+            ->get();
+
+        if ($mailboxes->isEmpty()) return;
+
+        Process::run('id vmail >/dev/null 2>&1 || sudo useradd -r -g mail -d /var/empty -s /sbin/nologin vmail 2>/dev/null');
+
+        foreach ($mailboxes as $mailbox) {
+            $mailboxBase = dirname($mailbox->mailbox_path);
+            $domainBase = dirname($mailboxBase);
+            $mailBase = dirname($domainBase);
+
+            if (!str_starts_with($mailboxBase, "{$home}/mail/")) {
+                continue;
+            }
+
+            Process::run('sudo chmod 711 ' . escapeshellarg($mailBase) . ' ' . escapeshellarg($domainBase));
+            Process::run('sudo chown -R vmail:mail ' . escapeshellarg($mailboxBase));
+            Process::run('sudo chmod -R 700 ' . escapeshellarg($mailboxBase));
+        }
+
+        $result['actions'][] = 'virtual_mail_ownership_restored';
     }
 
     // =========================================================================
@@ -672,10 +707,11 @@ BIND;
 [{$username}]
 user = {$username}
 group = {$username}
-listen = /run/php-fpm-{$username}.sock
+listen = /run/openpanel-php-user-{$username}.sock
 listen.owner = nginx
 listen.group = nginx
 listen.mode = 0660
+listen.acl_users = nginx,apache
 
 pm = ondemand
 pm.max_children = 5
@@ -683,7 +719,7 @@ pm.process_idle_timeout = 300s
 pm.max_requests = 500
 
 php_admin_value[error_log] = {$home}/logs/php-error.log
-php_admin_flag[log_errors] = on
+php_admin_flag[log_errors] = 1
 php_admin_value[memory_limit] = 128M
 php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
@@ -694,11 +730,11 @@ php_admin_value[max_file_uploads] = 20
 ; Security isolation
 php_admin_value[open_basedir] = {$home}:/tmp:/usr/share/php
 php_admin_value[disable_functions] = passthru,system,dl,putenv,pcntl_exec,proc_nice,proc_terminate,proc_close,show_source
-php_admin_flag[expose_php] = off
+php_admin_flag[expose_php] = 0
 php_admin_value[session.save_path] = {$home}/tmp
 php_admin_value[upload_tmp_dir] = {$home}/tmp
 php_admin_value[sys_temp_dir] = {$home}/tmp
-php_admin_flag[display_errors] = off
+php_admin_flag[display_errors] = 0
 CONF;
 
         Process::run("sudo mkdir -p {$this->phpFpmPoolDir}");
@@ -751,7 +787,7 @@ CONF;
     {
         $home = "{$this->homeBase}/{$username}";
         try {
-            FtpService::addUser($username, $username, $password, $home, 'openpanel');
+            FtpService::addUser($username, $password, $username, $home);
         } catch (\Throwable $e) {
             // FTP setup is non-critical — log but don't fail account creation
             \Log::warning("FTP user setup failed for {$username}: " . $e->getMessage());

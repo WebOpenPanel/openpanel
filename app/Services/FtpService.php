@@ -7,6 +7,7 @@ class FtpService
     const PURE_FTPD_CONF = '/etc/pure-ftpd/pure-ftpd.conf';
     const PURE_PASSWD_FILE = '/etc/pure-ftpd/pureftpd.passwd';
     const PURE_DB_FILE = '/etc/pure-ftpd/pureftpd.pdb';
+    const PURE_FTPS_CERT = '/etc/pki/tls/private/pure-ftpd.pem';
 
     public static function getUserList(): array
     {
@@ -31,8 +32,13 @@ class FtpService
 
     public static function addUser(string $username, string $password, string $systemUser, string $path): string
     {
-        $output = ShellService::exec("(echo " . escapeshellarg($password) . "; echo " . escapeshellarg($password) . ") | pure-pw useradd " . escapeshellarg($username) . " -u " . escapeshellarg($systemUser) . " -g " . escapeshellarg($systemUser) . " -d " . escapeshellarg($path) . " -m 2>&1");
-        return $output;
+        return self::runPurePwWithPassword(
+            'pure-pw useradd ' . escapeshellarg($username) .
+            ' -u ' . escapeshellarg($systemUser) .
+            ' -g ' . escapeshellarg($systemUser) .
+            ' -d ' . escapeshellarg($path) . ' -m',
+            $password
+        );
     }
 
     public static function deleteUser(string $username): string
@@ -42,7 +48,10 @@ class FtpService
 
     public static function changePassword(string $username, string $password): string
     {
-        return ShellService::exec("(echo " . escapeshellarg($password) . "; echo " . escapeshellarg($password) . ") | pure-pw passwd " . escapeshellarg($username) . " -m 2>&1");
+        return self::runPurePwWithPassword(
+            'pure-pw passwd ' . escapeshellarg($username) . ' -m',
+            $password
+        );
     }
 
     public static function updateUserPath(string $username, string $newPath): string
@@ -75,7 +84,16 @@ class FtpService
     public static function getStatus(): array
     {
         $status = ShellService::exec('systemctl is-active pure-ftpd 2>/dev/null');
-        return ['active' => trim($status) === 'active'];
+        $tls = self::tlsStatus();
+
+        return [
+            'active' => trim($status) === 'active',
+            'ftps_enabled' => $tls['enabled'],
+            'tls_mode' => $tls['tls_mode'],
+            'cert_file' => $tls['cert_file'],
+            'cert_exists' => $tls['cert_exists'],
+            'passive_range' => $tls['passive_range'],
+        ];
     }
 
     public static function restart(): string
@@ -174,5 +192,55 @@ class FtpService
     {
         ShellService::exec("pure-pw usermod " . escapeshellarg($username) . " -r '*' -m 2>&1");
         return true;
+    }
+
+    public static function tlsStatus(): array
+    {
+        $conf = self::getConf();
+        preg_match('/^\s*TLS\s+(\S+)/mi', $conf, $tls);
+        preg_match('/^\s*CertFile\s+(.+)$/mi', $conf, $cert);
+        preg_match('/^\s*PassivePortRange\s+(.+)$/mi', $conf, $passive);
+
+        $mode = $tls[1] ?? '0';
+        $certFile = trim($cert[1] ?? self::PURE_FTPS_CERT, " \t\n\r\0\x0B\"'");
+        $certExists = is_file($certFile);
+
+        return [
+            'enabled' => in_array($mode, ['1', '2'], true) && $certExists,
+            'tls_mode' => $mode,
+            'cert_file' => $certFile,
+            'cert_exists' => $certExists,
+            'passive_range' => trim($passive[1] ?? ''),
+        ];
+    }
+
+    private static function runPurePwWithPassword(string $command, string $password): string
+    {
+        $password = str_replace(["\r", "\n"], '', $password);
+
+        $descriptorSpec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = proc_open($command . ' 2>&1', $descriptorSpec, $pipes, '/', [
+            'PATH' => '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        ]);
+
+        if (!is_resource($process)) {
+            return 'Failed to start pure-pw.';
+        }
+
+        fwrite($pipes[0], $password . "\n" . $password . "\n");
+        fclose($pipes[0]);
+
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        proc_close($process);
+
+        return trim($output . "\n" . $error);
     }
 }

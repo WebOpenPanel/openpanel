@@ -23,6 +23,34 @@ class MysqlService
         return DB::connection('mysql');
     }
 
+    protected static function identifier(string $value, string $label = 'identifier'): string
+    {
+        $value = trim($value);
+        if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', $value)) {
+            throw new \InvalidArgumentException("Invalid MySQL {$label}.");
+        }
+        return $value;
+    }
+
+    protected static function host(string $value): string
+    {
+        $value = trim($value);
+        if (!preg_match('/^[A-Za-z0-9_.:%-]{1,255}$/', $value)) {
+            throw new \InvalidArgumentException('Invalid MySQL host.');
+        }
+        return $value;
+    }
+
+    protected static function qi(string $value): string
+    {
+        return '`' . self::identifier($value) . '`';
+    }
+
+    protected static function qs(string $value): string
+    {
+        return DB::connection('mysql')->getPdo()->quote($value);
+    }
+
     public static function getDatabases(): array
     {
         try {
@@ -55,13 +83,13 @@ class MysqlService
 
     public static function createDatabase(string $name): bool
     {
-        DB::statement('CREATE DATABASE IF NOT EXISTS `' . $name . '`');
+        DB::statement('CREATE DATABASE IF NOT EXISTS ' . self::qi($name));
         return true;
     }
 
     public static function dropDatabase(string $name): bool
     {
-        DB::statement('DROP DATABASE IF EXISTS `' . $name . '`');
+        DB::statement('DROP DATABASE IF EXISTS ' . self::qi($name));
         return true;
     }
 
@@ -76,33 +104,45 @@ class MysqlService
 
     public static function createDatabaseUser(string $username, string $password, string $host = 'localhost'): bool
     {
-        DB::statement("CREATE USER IF NOT EXISTS '" . $username . "'@'" . $host . "' IDENTIFIED BY ?", [$password]);
+        $username = self::identifier($username, 'user');
+        $host = self::host($host);
+        DB::statement('CREATE USER IF NOT EXISTS ' . self::qs($username) . '@' . self::qs($host) . ' IDENTIFIED BY ?', [$password]);
         return true;
     }
 
     public static function dropDatabaseUser(string $username, string $host = 'localhost'): bool
     {
-        DB::statement("DROP USER IF EXISTS '" . $username . "'@'" . $host . "'");
+        $username = self::identifier($username, 'user');
+        $host = self::host($host);
+        DB::statement('DROP USER IF EXISTS ' . self::qs($username) . '@' . self::qs($host));
         return true;
     }
 
     public static function grantPrivileges(string $username, string $database, string $host = 'localhost'): bool
     {
-        DB::statement("GRANT ALL PRIVILEGES ON `" . $database . "`.* TO '" . $username . "'@'" . $host . "'");
+        $username = self::identifier($username, 'user');
+        $database = self::identifier($database, 'database');
+        $host = self::host($host);
+        DB::statement('GRANT ALL PRIVILEGES ON ' . self::qi($database) . '.* TO ' . self::qs($username) . '@' . self::qs($host));
         DB::statement('FLUSH PRIVILEGES');
         return true;
     }
 
     public static function revokePrivileges(string $username, string $database, string $host = 'localhost'): bool
     {
-        DB::statement("REVOKE ALL PRIVILEGES ON `" . $database . "`.* FROM '" . $username . "'@'" . $host . "'");
+        $username = self::identifier($username, 'user');
+        $database = self::identifier($database, 'database');
+        $host = self::host($host);
+        DB::statement('REVOKE ALL PRIVILEGES ON ' . self::qi($database) . '.* FROM ' . self::qs($username) . '@' . self::qs($host));
         DB::statement('FLUSH PRIVILEGES');
         return true;
     }
 
     public static function changeUserPassword(string $username, string $password, string $host = 'localhost'): bool
     {
-        DB::statement("ALTER USER '" . $username . "'@'" . $host . "' IDENTIFIED BY ?", [$password]);
+        $username = self::identifier($username, 'user');
+        $host = self::host($host);
+        DB::statement('ALTER USER ' . self::qs($username) . '@' . self::qs($host) . ' IDENTIFIED BY ?', [$password]);
         DB::statement('FLUSH PRIVILEGES');
         return true;
     }
@@ -110,7 +150,9 @@ class MysqlService
     public static function getUserGrants(string $username, string $host = 'localhost'): array
     {
         try {
-            return DB::select("SHOW GRANTS FOR '" . $username . "'@'" . $host . "'");
+            $username = self::identifier($username, 'user');
+            $host = self::host($host);
+            return DB::select('SHOW GRANTS FOR ' . self::qs($username) . '@' . self::qs($host));
         } catch (\Exception $e) {
             return [];
         }
@@ -129,7 +171,7 @@ class MysqlService
     public static function optimizeTable(string $database, string $table): string
     {
         try {
-            DB::statement("OPTIMIZE TABLE `{$database}`.`{$table}`");
+            DB::statement('OPTIMIZE TABLE ' . self::qi($database) . '.' . self::qi($table));
             return 'Table optimized successfully';
         } catch (\Exception $e) {
             return 'Error: ' . $e->getMessage();
@@ -139,7 +181,7 @@ class MysqlService
     public static function repairTable(string $database, string $table): string
     {
         try {
-            DB::statement("REPAIR TABLE `{$database}`.`{$table}`");
+            DB::statement('REPAIR TABLE ' . self::qi($database) . '.' . self::qi($table));
             return 'Table repaired successfully';
         } catch (\Exception $e) {
             return 'Error: ' . $e->getMessage();
@@ -198,27 +240,26 @@ class MysqlService
 
     public static function dumpDatabase(string $database, string $outputPath): bool
     {
-        $password = self::getRootPassword();
-        ShellService::exec("mysqldump -u root -p'{$password}' " . escapeshellarg($database) . " > " . escapeshellarg($outputPath) . " 2>&1");
+        $database = self::identifier($database, 'database');
+        ShellService::exec("sudo bash -c " . escapeshellarg("mysqldump " . escapeshellarg($database) . " > " . escapeshellarg($outputPath)) . " 2>&1", 60, false);
+        ShellService::exec("sudo chown root:nginx " . escapeshellarg($outputPath) . " && sudo chmod 0640 " . escapeshellarg($outputPath), 10, false);
         return file_exists($outputPath) && filesize($outputPath) > 0;
     }
 
     public static function importDatabase(string $database, string $sqlPath): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysql -u root -p'{$password}' " . escapeshellarg($database) . " < " . escapeshellarg($sqlPath) . " 2>&1");
+        $database = self::identifier($database, 'database');
+        return ShellService::exec("sudo mysql " . escapeshellarg($database) . " < " . escapeshellarg($sqlPath) . " 2>&1", 60, false);
     }
 
     public static function optimizeAllDatabases(): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysqlcheck -u root -p'{$password}' --optimize --all-databases 2>&1");
+        return ShellService::exec("sudo mysqlcheck --optimize --all-databases 2>&1", 60, false);
     }
 
     public static function repairAllDatabases(): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysqlcheck -u root -p'{$password}' --repair --all-databases 2>&1");
+        return ShellService::exec("sudo mysqlcheck --repair --all-databases 2>&1", 60, false);
     }
 
     // PostgreSQL
@@ -270,13 +311,12 @@ class MysqlService
     // phpMyAdmin
     public static function phpMyAdminIsInstalled(): bool
     {
-        return file_exists('/usr/local/openpanel/var/services/pma') || file_exists('/var/www/html/phpmyadmin');
+        return file_exists('/usr/share/phpmyadmin/index.php') || file_exists('/usr/share/phpMyAdmin/index.php');
     }
 
     public static function phpMyAdminAutologin(): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysql -u root -p'{$password}' -e 'SELECT 1' 2>/dev/null && echo 'OK'");
+        return self::phpMyAdminIsInstalled() ? 'cookie-auth' : 'not-installed';
     }
 
     // MySQL/MariaDB service
@@ -339,7 +379,10 @@ class MysqlService
         $valid = array_intersect($privileges, self::PRIVILEGES);
         if (empty($valid)) return false;
         $privStr = implode(', ', $valid);
-        DB::statement("GRANT {$privStr} ON `{$database}`.* TO '{$username}'@'{$host}'");
+        $username = self::identifier($username, 'user');
+        $database = self::identifier($database, 'database');
+        $host = self::host($host);
+        DB::statement('GRANT ' . $privStr . ' ON ' . self::qi($database) . '.* TO ' . self::qs($username) . '@' . self::qs($host));
         DB::statement('FLUSH PRIVILEGES');
         return true;
     }
@@ -352,7 +395,9 @@ class MysqlService
         if (isset($limits['max_connections_per_hour'])) $clauses[] = "MAX_CONNECTIONS_PER_HOUR " . (int) $limits['max_connections_per_hour'];
         if (isset($limits['max_user_connections'])) $clauses[] = "MAX_USER_CONNECTIONS " . (int) $limits['max_user_connections'];
         if (empty($clauses)) return false;
-        DB::statement("ALTER USER '{$username}'@'{$host}' WITH " . implode(' ', $clauses));
+        $username = self::identifier($username, 'user');
+        $host = self::host($host);
+        DB::statement('ALTER USER ' . self::qs($username) . '@' . self::qs($host) . ' WITH ' . implode(' ', $clauses));
         return true;
     }
 
@@ -382,28 +427,30 @@ class MysqlService
     public static function optimizeDatabase(string $database): string
     {
         $password = self::getRootPassword();
-        return ShellService::exec("mysqlcheck -u root -p'{$password}' --optimize " . escapeshellarg($database) . " 2>&1");
+        $database = self::identifier($database, 'database');
+        return ShellService::exec("mysqlcheck -u root -p'{$password}' --optimize " . escapeshellarg($database) . " 2>&1", 60, false);
     }
 
     public static function checkDatabase(string $database): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysqlcheck -u root -p'{$password}' --check " . escapeshellarg($database) . " 2>&1");
+        $database = self::identifier($database, 'database');
+        return ShellService::exec("sudo mysqlcheck --check " . escapeshellarg($database) . " 2>&1", 60, false);
     }
 
     public static function repairDatabase(string $database): string
     {
-        $password = self::getRootPassword();
-        return ShellService::exec("mysqlcheck -u root -p'{$password}' --repair " . escapeshellarg($database) . " 2>&1");
+        $database = self::identifier($database, 'database');
+        return ShellService::exec("sudo mysqlcheck --repair " . escapeshellarg($database) . " 2>&1", 60, false);
     }
 
     public static function backupDatabase(string $database, ?string $outputPath = null): string
     {
         $outputPath = $outputPath ?: "/backup/mysql/{$database}_" . date('Y-m-d_H-i-s') . ".sql.gz";
         $dir = dirname($outputPath);
-        if (!is_dir($dir)) mkdir($dir, 0755, true);
-        $password = self::getRootPassword();
-        ShellService::exec("mysqldump -u root -p'{$password}' " . escapeshellarg($database) . " 2>/dev/null | gzip > " . escapeshellarg($outputPath));
+        ShellService::exec("sudo mkdir -p " . escapeshellarg($dir) . " && sudo chown root:nginx " . escapeshellarg($dir) . " && sudo chmod 0750 " . escapeshellarg($dir), 10, false);
+        $database = self::identifier($database, 'database');
+        ShellService::exec("sudo bash -c " . escapeshellarg("mysqldump " . escapeshellarg($database) . " 2>/dev/null | gzip > " . escapeshellarg($outputPath)), 60, false);
+        ShellService::exec("sudo chown root:nginx " . escapeshellarg($outputPath) . " && sudo chmod 0640 " . escapeshellarg($outputPath), 10, false);
         return $outputPath;
     }
 

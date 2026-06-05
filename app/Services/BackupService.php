@@ -6,6 +6,7 @@ use App\Models\Backup;
 use App\Models\BackupConfig;
 use App\Models\UserAccount;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Process;
 
 class BackupService
 {
@@ -13,6 +14,29 @@ class BackupService
     const BACKUP_DIR = '/backup/openpanel_backup/';
     const BACKUP_DB = '/usr/local/openpanel/.conf/backup_config.sqlite';
     const BACKUP_CRON = '/usr/local/openpanel/include/cron_newbackup.php';
+
+    protected static function ensureBackupBase(): void
+    {
+        $base = rtrim(self::BACKUP_BASE, '/');
+        $baseArg = escapeshellarg($base);
+        $result = Process::timeout(10)->run("sudo mkdir -p {$baseArg} && sudo chown root:nginx {$baseArg} && sudo chmod 0750 {$baseArg}");
+        if (!$result->successful()) {
+            throw new \RuntimeException('Unable to prepare backup directory.');
+        }
+    }
+
+    protected static function secureBackupFile(string $path): int
+    {
+        $pathArg = escapeshellarg($path);
+        Process::timeout(10)->run("sudo chown root:nginx {$pathArg} && sudo chmod 0640 {$pathArg}");
+        $sizeResult = Process::run("stat -c%s {$pathArg} 2>/dev/null || echo 0");
+        return (int) trim($sizeResult->output());
+    }
+
+    protected static function validUsername(string $username): bool
+    {
+        return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/', $username);
+    }
 
     public static function getBackupConfig(): ?BackupConfig
     {
@@ -24,8 +48,81 @@ class BackupService
         return BackupConfig::updateOrCreate([], $data);
     }
 
+    public static function runScheduledBackups(bool $force = false): array
+    {
+        $config = self::getBackupConfig();
+        if (!$config || !$config->enabled) {
+            return ['success' => true, 'skipped' => true, 'reason' => 'Backups disabled or not configured.'];
+        }
+
+        if (!$force && !self::scheduledBackupDue($config)) {
+            return ['success' => true, 'skipped' => true, 'reason' => 'Backup is not due yet.'];
+        }
+
+        $created = [];
+        $accountIds = array_filter((array) ($config->accounts ?? []));
+        if ($accountIds) {
+            foreach ($accountIds as $accountId) {
+                $account = UserAccount::find((int) $accountId);
+                if (!$account) {
+                    $legacy = DB::connection('mysql')->table('accounts')->where('id', (int) $accountId)->first();
+                    if (!$legacy) continue;
+                    $created[] = self::generateAccountBackup($legacy->username);
+                    continue;
+                }
+                $created[] = self::generateAccountBackup($account->username, $account->id);
+            }
+        } else {
+            $created[] = self::generateFullBackup();
+        }
+
+        $completed = array_values(array_filter($created, fn(Backup $backup) => $backup->status === 'completed'));
+        $remoteResults = [];
+        if (($config->destination ?? 'local') === 'remote') {
+            foreach ($completed as $backup) {
+                $remoteResults[] = self::transferBackupSsh(
+                    $backup->path,
+                    (string) $config->remote_host,
+                    (string) $config->remote_user,
+                    rtrim((string) $config->remote_path, '/') . '/' . basename($backup->path),
+                    (string) ($config->remote_port ?: '22')
+                );
+            }
+        }
+
+        return [
+            'success' => count($created) > 0 && count($completed) === count($created),
+            'created' => array_map(fn(Backup $backup) => [
+                'id' => $backup->id,
+                'type' => $backup->type,
+                'status' => $backup->status,
+                'path' => $backup->path,
+                'size_bytes' => $backup->size_bytes,
+            ], $created),
+            'cleanup_deleted' => self::cleanupOldBackups((int) ($config->retention_days ?: 30)),
+            'remote_results' => $remoteResults,
+        ];
+    }
+
+    protected static function scheduledBackupDue(BackupConfig $config): bool
+    {
+        $last = Backup::where('status', 'completed')->orderByDesc('completed_at')->first();
+        if (!$last || !$last->completed_at) {
+            return true;
+        }
+
+        $hours = match ($config->frequency) {
+            'weekly' => 168,
+            'monthly' => 720,
+            default => 24,
+        };
+
+        return $last->completed_at->diffInHours(now()) >= $hours;
+    }
+
     public static function generateFullBackup(): Backup
     {
+        self::ensureBackupBase();
         $filename = 'full_backup_' . date('Y-m-d_H-i-s') . '.tar.gz';
         $path = self::BACKUP_BASE . $filename;
 
@@ -38,21 +135,35 @@ class BackupService
             'started_at' => now(),
         ]);
 
-        ShellService::execBackground("tar -czf {$path} -C / home etc/mail var/named var/spool/postfix 2>/dev/null && echo 'done' > {$path}.status");
+        $pathArg = escapeshellarg($path);
+        $result = Process::timeout(900)->run("sudo tar -czf {$pathArg} -C / home etc/mail var/named var/spool/postfix 2>&1");
+        $size = $result->successful() ? self::secureBackupFile($path) : 0;
 
-        $backup->update(['status' => 'completed', 'completed_at' => now(), 'size' => filesize($path) ?: 0]);
+        $backup->update([
+            'status' => ($result->successful() && $size > 0) ? 'completed' : 'failed',
+            'completed_at' => now(),
+            'size_bytes' => $size,
+            'error_message' => $result->successful() ? null : substr($result->errorOutput() ?: $result->output(), 0, 1000),
+        ]);
         return $backup;
     }
 
     public static function generateAccountBackup(string $username, ?int $accountId = null): Backup
     {
-        $account = $accountId ? UserAccount::find($accountId) : UserAccount::where('username', $username)->first();
-        $domain = $account->domain ?? $username;
+        if (!self::validUsername($username)) {
+            throw new \InvalidArgumentException('Invalid account username.');
+        }
+
+        self::ensureBackupBase();
+        $account = $accountId ? UserAccount::find($accountId) : null;
+        $legacyAccount = DB::connection('mysql')->table('accounts')->where('username', $username)->first();
+        $domain = $account->domain ?? $legacyAccount->domain ?? $username;
         $filename = "account_{$username}_" . date('Y-m-d_H-i-s') . '.tar.gz';
         $path = self::BACKUP_BASE . $filename;
+        $tarPath = str_replace('.tar.gz', '.tar', $path);
 
         $backup = Backup::create([
-            'user_account_id' => $account->id ?? null,
+            'user_account_id' => $account?->id,
             'filename' => $filename,
             'path' => $path,
             'type' => 'account',
@@ -65,23 +176,27 @@ class BackupService
         $maildir = "/var/spool/mail/{$username}";
         $dnsfile = "/var/named/{$domain}.db";
 
-        $cmd = "tar -czf {$path} -C / home/{$username}";
-        if (file_exists($maildir)) $cmd .= " var/spool/mail/{$username}";
-        if (file_exists($dnsfile)) $cmd .= " var/named/{$domain}.db";
+        $cmd = "sudo tar -cf " . escapeshellarg($tarPath) . " -C / " . escapeshellarg("home/{$username}");
+        if (file_exists($maildir)) $cmd .= " " . escapeshellarg("var/spool/mail/{$username}");
+        if (file_exists($dnsfile)) $cmd .= " " . escapeshellarg("var/named/{$domain}.db");
         $cmd .= " 2>&1";
 
-        ShellService::exec($cmd);
+        $tar = Process::timeout(600)->run($cmd);
 
-        $dbDump = self::dumpUserDatabases($username);
-        if ($dbDump) {
-            ShellService::exec("tar -rf " . str_replace('.tar.gz', '.tar', $path) . " -C /tmp {$username}_databases.sql 2>/dev/null && gzip -f " . str_replace('.tar.gz', '.tar', $path));
-            @unlink("/tmp/{$username}_databases.sql");
+        if ($tar->successful() && self::dumpUserDatabases($username)) {
+            Process::timeout(120)->run("sudo tar -rf " . escapeshellarg($tarPath) . " -C / " . escapeshellarg("tmp/{$username}_databases.sql") . " 2>/dev/null");
+            Process::timeout(10)->run("sudo rm -f " . escapeshellarg("/tmp/{$username}_databases.sql"));
         }
+        $gzip = $tar->successful()
+            ? Process::timeout(300)->run("sudo gzip -f " . escapeshellarg($tarPath) . " 2>&1")
+            : null;
+        $size = ($gzip && $gzip->successful()) ? self::secureBackupFile($path) : 0;
 
         $backup->update([
-            'status' => 'completed',
+            'status' => ($gzip && $gzip->successful() && $size > 0) ? 'completed' : 'failed',
             'completed_at' => now(),
-            'size' => filesize($path) ?: 0,
+            'size_bytes' => $size,
+            'error_message' => ($gzip && $gzip->successful()) ? null : substr(($gzip?->errorOutput() ?: $tar->errorOutput() ?: $tar->output()), 0, 1000),
         ]);
 
         return $backup;
@@ -89,6 +204,11 @@ class BackupService
 
     public static function generateDatabaseBackup(string $database): Backup
     {
+        if ($database !== 'all' && !preg_match('/^[A-Za-z0-9_]+$/', $database)) {
+            throw new \InvalidArgumentException('Invalid database name.');
+        }
+
+        self::ensureBackupBase();
         $filename = "db_{$database}_" . date('Y-m-d_H-i-s') . '.sql.gz';
         $path = self::BACKUP_BASE . $filename;
 
@@ -101,13 +221,17 @@ class BackupService
             'started_at' => now(),
         ]);
 
-        $password = self::getMysqlRootPassword();
-        ShellService::exec("mysqldump -u root -p'{$password}' {$database} 2>/dev/null | gzip > {$path}");
+        $dumpCmd = $database === 'all'
+            ? "mysqldump --all-databases"
+            : "mysqldump " . escapeshellarg($database);
+        $result = Process::timeout(600)->run("sudo bash -c " . escapeshellarg("{$dumpCmd} 2>/dev/null | gzip > " . escapeshellarg($path)));
+        $size = $result->successful() ? self::secureBackupFile($path) : 0;
 
         $backup->update([
-            'status' => 'completed',
+            'status' => ($result->successful() && $size > 0) ? 'completed' : 'failed',
             'completed_at' => now(),
-            'size' => filesize($path) ?: 0,
+            'size_bytes' => $size,
+            'error_message' => $result->successful() ? null : substr($result->errorOutput() ?: $result->output(), 0, 1000),
         ]);
 
         return $backup;
@@ -115,6 +239,7 @@ class BackupService
 
     public static function generateFilesBackup(string $path, string $name = ''): Backup
     {
+        self::ensureBackupBase();
         $name = $name ?: basename($path);
         $filename = "files_{$name}_" . date('Y-m-d_H-i-s') . '.tar.gz';
         $backupPath = self::BACKUP_BASE . $filename;
@@ -128,12 +253,14 @@ class BackupService
             'started_at' => now(),
         ]);
 
-        ShellService::exec("tar -czf {$backupPath} -C " . dirname($path) . " " . basename($path) . " 2>&1");
+        $result = Process::timeout(600)->run("sudo tar -czf " . escapeshellarg($backupPath) . " -C " . escapeshellarg(dirname($path)) . " " . escapeshellarg(basename($path)) . " 2>&1");
+        $size = $result->successful() ? self::secureBackupFile($backupPath) : 0;
 
         $backup->update([
-            'status' => 'completed',
+            'status' => ($result->successful() && $size > 0) ? 'completed' : 'failed',
             'completed_at' => now(),
-            'size' => filesize($backupPath) ?: 0,
+            'size_bytes' => $size,
+            'error_message' => $result->successful() ? null : substr($result->errorOutput() ?: $result->output(), 0, 1000),
         ]);
 
         return $backup;
@@ -210,12 +337,17 @@ class BackupService
         $ext = pathinfo($path, PATHINFO_EXTENSION);
         $flags = '--no-same-owner --one-file-system';
         if ($ext === 'gz') {
-            $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
+            $result = Process::timeout(600)->run("sudo tar -xzf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
         } else {
-            $output = ShellService::exec("tar -xf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
+            $result = Process::timeout(600)->run("sudo tar -xf " . escapeshellarg($path) . " -C / {$flags} 2>&1");
         }
 
-        return ['success' => true, 'output' => $output, 'validation' => $validation];
+        return [
+            'success' => $result->successful(),
+            'output' => $result->output(),
+            'error' => $result->errorOutput(),
+            'validation' => $validation,
+        ];
     }
 
     public static function restoreAccountBackup(Backup $backup, string $username): array
@@ -237,27 +369,36 @@ class BackupService
 
         // Extract to user's home directory (not root), with safety flags
         $home = "/home/{$username}";
-        $output = ShellService::exec("tar -xzf " . escapeshellarg($path) . " -C / --no-same-owner --one-file-system 2>&1");
+        $result = Process::timeout(600)->run("sudo tar -xzf " . escapeshellarg($path) . " -C / --no-same-owner --one-file-system 2>&1");
+        Process::timeout(120)->run("sudo chown -R " . escapeshellarg($username) . ":" . escapeshellarg($username) . " " . escapeshellarg($home) . " 2>&1");
 
         // Restore database if present
         $dbDump = "/tmp/{$username}_databases.sql";
+        $legacyRootDump = "/{$username}_databases.sql";
+        if (!file_exists($dbDump) && file_exists($legacyRootDump)) {
+            $dbDump = $legacyRootDump;
+        }
         if (file_exists($dbDump)) {
-            $password = self::getMysqlRootPassword();
-            ShellService::exec("mysql -u root -p'{$password}' < " . escapeshellarg($dbDump) . " 2>&1");
-            @unlink($dbDump);
+            Process::timeout(600)->run("sudo mysql < " . escapeshellarg($dbDump) . " 2>&1");
+            Process::timeout(10)->run("sudo rm -f " . escapeshellarg($dbDump) . " " . escapeshellarg($legacyRootDump));
         }
 
-        return ['success' => true, 'output' => $output, 'validation' => $validation];
+        return [
+            'success' => $result->successful(),
+            'output' => $result->output(),
+            'error' => $result->errorOutput(),
+            'validation' => $validation,
+        ];
     }
 
     public static function deleteBackup(Backup $backup): bool
     {
         if (file_exists($backup->path)) {
-            unlink($backup->path);
+            Process::timeout(10)->run("sudo rm -f " . escapeshellarg($backup->path));
         }
         $statusFile = $backup->path . '.status';
         if (file_exists($statusFile)) {
-            unlink($statusFile);
+            Process::timeout(10)->run("sudo rm -f " . escapeshellarg($statusFile));
         }
         return $backup->delete();
     }
@@ -307,7 +448,7 @@ class BackupService
         foreach (ShellService::dirList(self::BACKUP_BASE) as $file) {
             $fullPath = self::BACKUP_BASE . $file;
             if (is_file($fullPath) && filemtime($fullPath) < $cutoff) {
-                unlink($fullPath);
+                Process::timeout(10)->run("sudo rm -f " . escapeshellarg($fullPath));
                 $deleted++;
             }
         }
@@ -316,7 +457,24 @@ class BackupService
 
     public static function transferBackupSsh(string $path, string $remoteHost, string $remoteUser, string $remotePath, string $port = '22'): string
     {
-        return ShellService::exec("scp -P {$port} " . escapeshellarg($path) . " " . escapeshellarg($remoteUser . '@' . $remoteHost . ':' . $remotePath) . " 2>&1");
+        if (!is_file($path)) {
+            return 'Backup file not found.';
+        }
+        if (!preg_match('/^[A-Za-z0-9_.:-]+$/', $remoteHost) || !self::validUsername($remoteUser) || !preg_match('/^\d{1,5}$/', $port)) {
+            return 'Invalid remote destination.';
+        }
+        if ($remotePath === '' || str_contains($remotePath, "\n")) {
+            return 'Invalid remote path.';
+        }
+
+        $target = "{$remoteUser}@{$remoteHost}:{$remotePath}";
+        $result = Process::timeout(600)->run(
+            "scp -B -P " . escapeshellarg($port) .
+            " -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 " .
+            escapeshellarg($path) . " " . escapeshellarg($target) . " 2>&1"
+        );
+
+        return $result->successful() ? 'remote transfer completed' : trim($result->errorOutput() ?: $result->output());
     }
 
     // ---- SQLite3-based backup manager ----
@@ -468,8 +626,12 @@ class BackupService
 
         if (!empty($data['FTP_PASS'])) {
             $timerKey = 'PP' . date('YmdHis');
-            ShellService::exec("echo '" . addslashes($data['FTP_PASS']) . "' > /usr/local/openpanel/.conf/{$timerKey}");
-            ShellService::exec("chmod 0600 /usr/local/openpanel/.conf/{$timerKey}");
+            Process::timeout(10)->run("sudo mkdir -p /usr/local/openpanel/.conf && sudo chown root:nginx /usr/local/openpanel/.conf && sudo chmod 0750 /usr/local/openpanel/.conf");
+            $secretTmp = tempnam(sys_get_temp_dir(), 'opbackup');
+            file_put_contents($secretTmp, (string) $data['FTP_PASS']);
+            chmod($secretTmp, 0600);
+            Process::timeout(10)->run("sudo install -m 0600 -o root -g nginx " . escapeshellarg($secretTmp) . " " . escapeshellarg("/usr/local/openpanel/.conf/{$timerKey}"));
+            @unlink($secretTmp);
             $data['FTP_PASS'] = $timerKey;
         }
 
@@ -586,10 +748,21 @@ class BackupService
 
     private static function dumpUserDatabases(string $username): bool
     {
-        $password = self::getMysqlRootPassword();
         $outputFile = "/tmp/{$username}_databases.sql";
-        ShellService::exec("mysqldump -u root -p'{$password}' --databases " . escapeshellarg($username) . "_* 2>/dev/null > " . escapeshellarg($outputFile));
-        return file_exists($outputFile) && filesize($outputFile) > 0;
+        $like = str_replace(['\\', '_', '%'], ['\\\\', '\\_', '\\%'], $username) . '\\_%';
+        $dbList = Process::timeout(30)->run("sudo mysql -N -e " . escapeshellarg("SHOW DATABASES LIKE '{$like}'") . " 2>/dev/null");
+        if (!$dbList->successful()) {
+            return false;
+        }
+        $databases = array_values(array_filter(array_map('trim', explode("\n", $dbList->output()))));
+
+        if (empty($databases)) {
+            return false;
+        }
+
+        $dbArgs = implode(' ', array_map('escapeshellarg', $databases));
+        $dump = Process::timeout(300)->run("sudo mysqldump --databases {$dbArgs} 2>/dev/null > " . escapeshellarg($outputFile));
+        return $dump->successful() && file_exists($outputFile) && filesize($outputFile) > 0;
     }
 
     private static function getMysqlRootPassword(): string

@@ -17,14 +17,14 @@ class ShellService
         $blocked = config('openpanel.security.blocked_shells', []);
         foreach ($blocked as $pattern) {
             if (stripos($command, $pattern) !== false) {
-                Log::warning("ShellService: Blocked dangerous command: {$command}");
+                Log::warning("ShellService: Blocked dangerous command: " . self::redactSecrets($command));
                 return '';
             }
         }
 
         $maxLen = config('openpanel.security.max_command_length', 1000);
         if (strlen($command) > $maxLen) {
-            Log::warning("ShellService: Command exceeds max length ({$maxLen}): " . substr($command, 0, 100));
+            Log::warning("ShellService: Command exceeds max length ({$maxLen}): " . substr(self::redactSecrets($command), 0, 100));
             return '';
         }
 
@@ -39,7 +39,7 @@ class ShellService
         ]);
 
         if (!is_resource($process)) {
-            Log::error("ShellService: Failed to execute command: {$command}");
+            Log::error("ShellService: Failed to execute command: " . self::redactSecrets($command));
             return '';
         }
 
@@ -57,11 +57,11 @@ class ShellService
         $exitCode = proc_close($process);
 
         if (!empty($stderr)) {
-            Log::debug("ShellService stderr (exit={$exitCode}): {$stderr}");
+            Log::debug("ShellService stderr (exit={$exitCode}): " . self::redactSecrets($stderr));
         }
 
         if ($exitCode !== 0 && $audit) {
-            Log::warning("ShellService: Non-zero exit ({$exitCode}): {$command}");
+            Log::warning("ShellService: Non-zero exit ({$exitCode}): " . self::redactSecrets($command));
         }
 
         return trim($stdout);
@@ -76,9 +76,9 @@ class ShellService
         $blocked = config('openpanel.security.blocked_shells', []);
         foreach ($blocked as $pattern) {
             if (stripos($command, $pattern) !== false) {
-                Log::warning("ShellService: Blocked dangerous command: {$command}");
-                return ['output' => '', 'error' => 'Blocked: dangerous command detected.', 'exit_code' => 1];
-            }
+            Log::warning("ShellService: Blocked dangerous command: " . self::redactSecrets($command));
+            return ['output' => '', 'error' => 'Blocked: dangerous command detected.', 'exit_code' => 1];
+        }
         }
 
         $descriptorSpec = [
@@ -92,7 +92,7 @@ class ShellService
         ]);
 
         if (!is_resource($process)) {
-            Log::error("ShellService: Failed to execute: {$command}");
+            Log::error("ShellService: Failed to execute: " . self::redactSecrets($command));
             return ['output' => '', 'error' => 'Failed to start process.', 'exit_code' => -1];
         }
 
@@ -133,7 +133,30 @@ class ShellService
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
-        @file_put_contents($logFile, "[{$timestamp}] [{$user}] [{$ip}] {$command}\n", FILE_APPEND | LOCK_EX);
+        @file_put_contents($logFile, "[{$timestamp}] [{$user}] [{$ip}] " . self::redactSecrets($command) . "\n", FILE_APPEND | LOCK_EX);
+    }
+
+    protected static function redactSecrets(string $text): string
+    {
+        $patterns = [
+            '/(--admin_password=)([^\\s]+)/i',
+            '/(--admin-pass(?:word)?=)([^\\s]+)/i',
+            '/(--password=)([^\\s]+)/i',
+            '/(password=)([^\\s&]+)/i',
+            '/(passwd=)([^\\s&]+)/i',
+            '/(Authorization:\\s*Bearer\\s+)([^\\s]+)/i',
+            '/(DB_PASSWORD\\s*=\\s*)([^\\s]+)/i',
+            '/(APP_KEY\\s*=\\s*)([^\\s]+)/i',
+            '/((?:mysql|mysqldump)\\b[^\\n]*\\s-p)(?:\'[^\']*\'|"[^"]*"|\\S*)/i',
+            '/(echo\\s+)([\'"])(.*?)(\\2\\s*>\\s*\\/usr\\/local\\/openpanel\\/\\.conf\\/[^\\s]+)/i',
+            '/(pwd\\s*:\\s*[\'"])[^\'"]+/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            $text = preg_replace($pattern, '$1[REDACTED]', $text) ?? $text;
+        }
+
+        return $text;
     }
 
     public static function readFile(string $path): string
@@ -288,7 +311,7 @@ class ShellService
         $duration = round(microtime(true) - $start, 2);
 
         // Log without secrets
-        $logCmd = mb_substr($command, 0, 200);
+        $logCmd = mb_substr(self::redactSecrets($command), 0, 200);
         Log::info("runAsUser", [
             'user' => $username,
             'cmd' => $logCmd,

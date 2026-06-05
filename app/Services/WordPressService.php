@@ -357,53 +357,75 @@ class WordPressService
     public function backupSite(WordPressSite $site, string $type = 'full'): array
     {
         $task = $this->createTask($site, 'backup');
+        $dumpPath = null;
+        $username = '';
 
         try {
+            if (!in_array($type, ['full', 'db', 'files'], true)) {
+                throw new \InvalidArgumentException('Invalid WordPress backup type.');
+            }
+
             $backupDir = "{$this->backupBase}/{$site->id}";
-            Process::timeout(10)->run("mkdir -p {$backupDir}");
+            $backupDirArg = escapeshellarg($backupDir);
+            $mkdir = Process::timeout(10)->run("sudo mkdir -p {$backupDirArg} && sudo chown root:nginx {$backupDirArg} && sudo chmod 0750 {$backupDirArg}");
+            if (!$mkdir->successful()) {
+                throw new \RuntimeException('Unable to create WordPress backup directory.');
+            }
 
             $timestamp = date('Y-m-d_H-i-s');
             $backupFile = "{$backupDir}/backup_{$type}_{$timestamp}.tar.gz";
+            $backupFileArg = escapeshellarg($backupFile);
+            $username = $this->getUsername($site);
 
             if ($type === 'full') {
-                $cmd = "tar -czf {$backupFile} -C " . dirname($site->install_path) . " " . basename($site->install_path);
+                $cmd = "sudo tar -czf {$backupFileArg} -C " . escapeshellarg(dirname($site->install_path)) . " " . escapeshellarg(basename($site->install_path));
             } elseif ($type === 'db') {
-                $dbDump = "{$backupDir}/db_{$timestamp}.sql";
-                $this->runWpCli($site->install_path, "db export {$dbDump}", $this->getUsername($site));
-                $cmd = "tar -czf {$backupFile} -C {$backupDir} db_{$timestamp}.sql";
+                $dumpDir = "/home/{$username}/.openpanel/tmp";
+                ShellService::runAsUser($username, "mkdir -p " . escapeshellarg($dumpDir) . " && chmod 700 " . escapeshellarg($dumpDir), 10, "/home/{$username}");
+                $dumpPath = "{$dumpDir}/db_{$site->id}_{$timestamp}.sql";
+                $export = $this->runWpCli($site->install_path, "db export " . escapeshellarg($dumpPath), $username, 300);
+                if (!$export['success']) {
+                    throw new \RuntimeException('Database export failed.');
+                }
+                $cmd = "sudo tar -czf {$backupFileArg} -C " . escapeshellarg($dumpDir) . " " . escapeshellarg(basename($dumpPath));
             } else {
-                $cmd = "tar -czf {$backupFile} -C {$site->install_path} wp-content";
+                $cmd = "sudo tar -czf {$backupFileArg} -C " . escapeshellarg($site->install_path) . " wp-content";
             }
 
             $result = Process::timeout(300)->run($cmd);
 
-            if ($type === 'db') {
-                $dbDump = "{$backupDir}/db_{$timestamp}.sql";
-                Process::timeout(10)->run("rm -f {$dbDump}");
+            if ($dumpPath) {
+                ShellService::runAsUser($username, "rm -f " . escapeshellarg($dumpPath), 10, "/home/{$username}");
             }
 
             $size = 0;
             if ($result->successful()) {
-                $sizeResult = Process::run("stat -c%s {$backupFile} 2>/dev/null || echo 0");
+                Process::timeout(10)->run("sudo chown root:nginx {$backupFileArg} && sudo chmod 0640 {$backupFileArg}");
+                $sizeResult = Process::run("stat -c%s {$backupFileArg} 2>/dev/null || echo 0");
                 $size = (int) trim($sizeResult->output());
             }
+
+            $completed = $result->successful() && $size > 0;
 
             $backup = WordPressBackup::create([
                 'wordpress_site_id' => $site->id,
                 'backup_path' => $backupFile,
                 'backup_type' => $type,
                 'size_bytes' => $size,
-                'status' => $result->successful() ? 'completed' : 'failed',
+                'status' => $completed ? 'completed' : 'failed',
             ]);
 
             $site->update(['last_backup_at' => now()]);
 
             return $this->finishTask($task, [
-                'success' => $result->successful(),
+                'success' => $completed,
                 'output' => "Backup saved: {$backupFile} (" . $this->formatBytes($size) . ")",
                 'error' => $result->errorOutput(),
             ]);
         } catch (\Throwable $e) {
+            if ($dumpPath && $username) {
+                ShellService::runAsUser($username, "rm -f " . escapeshellarg($dumpPath), 10, "/home/{$username}");
+            }
             return $this->failTask($task, $e->getMessage());
         }
     }
@@ -463,19 +485,31 @@ class WordPressService
     public function cloneSite(WordPressSite $site, string $targetDomain, string $targetPath = ''): array
     {
         $task = $this->createTask($site, 'clone');
+        $cloneDbName = null;
+        $cloneDbUser = null;
+        $targetPathForCleanup = null;
+        $dumpPath = "/tmp/wp_clone_db_{$site->id}_" . time() . ".sql";
 
         try {
             $username = $this->getUsername($site);
             if (!$targetPath) {
                 $targetPath = "/home/{$username}/public_html_staging";
             }
+            $targetPathForCleanup = $targetPath;
+
+            if (!$this->pathInsideHome($targetPath, $username)) {
+                throw new \RuntimeException('Target path must be inside the account home.');
+            }
+            if (WordPressSite::where('domain', $targetDomain)->exists()) {
+                throw new \RuntimeException("WordPress site record already exists for {$targetDomain}.");
+            }
 
             $cloneDbName = $this->generateDbName($username, '_staging');
-            $cloneDbUser = $this->generateDbUser($username, '_staging');
+            $cloneDbUser = $this->generateUniqueDbUser($username, '_stg');
             $cloneDbPass = Str::random(24);
 
             ShellService::runAsUser($username, "mkdir -p " . escapeshellarg($targetPath), 10, "/home/{$username}");
-            $copyResult = ShellService::runAsUser($username, "cp -a " . escapeshellarg($site->install_path) . "/* " . escapeshellarg($targetPath) . "/", 300, "/home/{$username}");
+            $copyResult = ShellService::runAsUser($username, "cp -a " . escapeshellarg($site->install_path) . "/. " . escapeshellarg($targetPath) . "/", 300, "/home/{$username}");
             if (!$copyResult['success']) {
                 throw new \RuntimeException("File copy failed: " . ($copyResult['error'] ?? ''));
             }
@@ -484,67 +518,169 @@ class WordPressService
             $this->createMysqlUser($cloneDbUser, $cloneDbPass);
             $this->grantMysqlPrivileges($cloneDbUser, $cloneDbName);
 
-            $this->runWpCli($site->install_path, "db export /tmp/wp_clone_db_{$site->id}.sql", $username);
-            $this->runWpCli($targetPath, "db import /tmp/wp_clone_db_{$site->id}.sql", $username);
-            Process::timeout(10)->run("rm -f /tmp/wp_clone_db_{$site->id}.sql");
+            $export = $this->runWpCli($site->install_path, "db export " . escapeshellarg($dumpPath), $username, 300);
+            if (!$export['success']) {
+                throw new \RuntimeException("Database export failed: " . ($export['error'] ?: $export['output'] ?? ''));
+            }
 
             $this->generateWpConfig($targetPath, $cloneDbName, $cloneDbUser, $cloneDbPass, $username);
 
+            $import = $this->runWpCli($targetPath, "db import " . escapeshellarg($dumpPath), $username, 300);
+            if (!$import['success']) {
+                throw new \RuntimeException("Database import failed: " . ($import['error'] ?: $import['output'] ?? ''));
+            }
+            Process::timeout(10)->run("rm -f " . escapeshellarg($dumpPath));
+
             $targetUrl = "http://{$targetDomain}";
-            $this->runWpCli($targetPath, "search-replace " . escapeshellarg($site->site_url) . " " . escapeshellarg($targetUrl) . " --all-tables", $username);
+            $replace = $this->runWpCli($targetPath, "search-replace " . escapeshellarg($site->site_url) . " " . escapeshellarg($targetUrl) . " --all-tables", $username, 300);
+            if (!$replace['success']) {
+                throw new \RuntimeException("URL search-replace failed: " . ($replace['error'] ?: $replace['output'] ?? ''));
+            }
+
+            $siteUrl = trim($this->runWpCli($targetPath, 'option get siteurl', $username)['output'] ?? '');
+            $homeUrl = trim($this->runWpCli($targetPath, 'option get home', $username)['output'] ?? '');
+            if ($siteUrl !== $targetUrl || $homeUrl !== $targetUrl) {
+                throw new \RuntimeException('Staging URL verification failed after search-replace.');
+            }
 
             $this->setFileOwnership($targetPath, $username);
             $this->setSafePermissions($targetPath, $username);
 
             $activeStack = $this->stackService->getActiveStack();
-            $this->stackService->generateVhostForDomain($activeStack, $username, $targetDomain, "/home/{$username}");
+            $this->stackService->generateVhostForDomain($activeStack, $username, $targetDomain, "/home/{$username}", $targetPath);
 
-            Process::timeout(10)->run("rm -f /tmp/wp_clone_db_{$site->id}.sql");
+            $wpVersion = trim($this->runWpCli($targetPath, 'core version', $username)['output'] ?? '');
+            $cloneSite = WordPressSite::create([
+                'user_account_id' => $site->user_account_id,
+                'parent_site_id' => $site->id,
+                'site_type' => str_starts_with($targetDomain, 'staging.') ? 'staging' : 'clone',
+                'domain_id' => null,
+                'domain' => $targetDomain,
+                'install_path' => $targetPath,
+                'site_url' => $targetUrl,
+                'admin_user' => $site->admin_user,
+                'admin_email' => $site->admin_email,
+                'db_name' => $cloneDbName,
+                'db_user' => $cloneDbUser,
+                'db_password_encrypted' => $cloneDbPass,
+                'wp_version' => $wpVersion,
+                'php_version' => $site->php_version,
+                'stack_name' => $activeStack,
+                'redis_enabled' => false,
+                'varnish_enabled' => false,
+                'ssl_enabled' => false,
+                'status' => 'active',
+                'performance_profile' => 'development',
+            ]);
+
+            $task->update(['wordpress_site_id' => $cloneSite->id]);
+            $safeSite = $cloneSite->toArray();
+            unset($safeSite['db_password_encrypted']);
 
             return $this->finishTask($task, [
                 'success' => true,
                 'output' => "Cloned to {$targetDomain} at {$targetPath}",
                 'error' => '',
+                'staging_site' => $safeSite,
             ]);
         } catch (\Throwable $e) {
+            Process::timeout(10)->run("rm -f " . escapeshellarg($dumpPath));
+            if ($cloneDbName) {
+                $this->dropMysqlDatabase($cloneDbName);
+            }
+            if ($cloneDbUser) {
+                $this->dropMysqlUser($cloneDbUser);
+            }
+            if ($targetPathForCleanup && isset($username) && $this->pathInsideHome($targetPathForCleanup, $username)) {
+                ShellService::runAsUser($username, "rm -rf " . escapeshellarg($targetPathForCleanup), 120, "/home/{$username}");
+            }
             return $this->failTask($task, $e->getMessage());
         }
     }
 
     public function createStaging(WordPressSite $site): array
     {
+        if (($site->site_type ?? 'live') === 'staging') {
+            return ['success' => false, 'message' => 'Cannot create staging from a staging site.'];
+        }
+        if (!$this->canCreateStaging($site)) {
+            return ['success' => false, 'message' => 'Staging limit reached for this package.'];
+        }
+
         $stagingDomain = "staging.{$site->domain}";
-        return $this->cloneSite($site, $stagingDomain);
+        $username = $this->getUsername($site);
+        $safeDomain = preg_replace('/[^A-Za-z0-9_.-]/', '_', $site->domain);
+        $targetPath = "/home/{$username}/staging/{$safeDomain}/public_html";
+
+        return $this->cloneSite($site, $stagingDomain, $targetPath);
     }
 
     public function pushStagingToLive(WordPressSite $stagingSite, WordPressSite $liveSite): array
     {
         $task = $this->createTask($liveSite, 'staging');
+        $username = $this->getUsername($liveSite);
+        $timestamp = time();
+        $stagingDbDump = "/tmp/wp_push_staging_{$liveSite->id}_{$timestamp}.sql";
+        $liveDbDump = "/tmp/wp_push_live_{$liveSite->id}_{$timestamp}.sql";
+        $preparedPath = "{$liveSite->install_path}_push_tmp_{$timestamp}";
+        $oldLivePath = "{$liveSite->install_path}_pre_push_{$timestamp}";
 
         try {
-            $this->backupSite($liveSite, 'full');
+            if (($stagingSite->site_type ?? '') !== 'staging' || (int) $stagingSite->parent_site_id !== (int) $liveSite->id) {
+                throw new \RuntimeException('Staging site does not belong to the selected live site.');
+            }
+            if (!$this->pathInsideHome($stagingSite->install_path, $username) || !$this->pathInsideHome($liveSite->install_path, $username)) {
+                throw new \RuntimeException('Invalid WordPress path for push.');
+            }
 
-            $username = $this->getUsername($liveSite);
+            $preBackup = $this->backupSite($liveSite, 'full');
+            if (!($preBackup['success'] ?? false)) {
+                throw new \RuntimeException('Pre-push backup failed.');
+            }
+            $preDbBackup = $this->backupSite($liveSite, 'db');
+            if (!($preDbBackup['success'] ?? false)) {
+                throw new \RuntimeException('Pre-push database backup failed.');
+            }
 
-            $this->runWpCli($liveSite->install_path, "db export /tmp/wp_push_db_{$liveSite->id}.sql", $username);
+            $liveExport = $this->runWpCli($liveSite->install_path, "db export " . escapeshellarg($liveDbDump), $username, 300);
+            if (!$liveExport['success']) {
+                throw new \RuntimeException('Live database pre-push export failed.');
+            }
+            $stagingExport = $this->runWpCli($stagingSite->install_path, "db export " . escapeshellarg($stagingDbDump), $username, 300);
+            if (!$stagingExport['success']) {
+                throw new \RuntimeException('Staging database export failed.');
+            }
 
-            ShellService::runAsUser($username, "rm -rf " . escapeshellarg($liveSite->install_path) . "/*", 300, "/home/{$username}");
-            ShellService::runAsUser($username, "cp -a " . escapeshellarg($stagingSite->install_path) . "/* " . escapeshellarg($liveSite->install_path) . "/", 300, "/home/{$username}");
-
-            $this->runWpCli($liveSite->install_path, 'db import ' . "/tmp/wp_push_db_{$liveSite->id}.sql", $username);
+            ShellService::runAsUser($username, "rm -rf " . escapeshellarg($preparedPath) . " && mkdir -p " . escapeshellarg($preparedPath), 120, "/home/{$username}");
+            $copy = ShellService::runAsUser($username, "cp -a " . escapeshellarg($stagingSite->install_path) . "/. " . escapeshellarg($preparedPath) . "/", 300, "/home/{$username}");
+            if (!$copy['success']) {
+                throw new \RuntimeException('Prepared staging file copy failed.');
+            }
 
             $liveDbName = $liveSite->db_name;
             $liveDbUser = $liveSite->db_user;
             $liveDbPass = $liveSite->db_password_encrypted;
-            $this->generateWpConfig($liveSite->install_path, $liveDbName, $liveDbUser, $liveDbPass, $username);
+            $this->generateWpConfig($preparedPath, $liveDbName, $liveDbUser, $liveDbPass, $username);
 
-            $this->runWpCli($liveSite->install_path, "search-replace " . escapeshellarg($stagingSite->site_url) . " " . escapeshellarg($liveSite->site_url) . " --all-tables", $username);
+            ShellService::runAsUser($username, "mv " . escapeshellarg($liveSite->install_path) . " " . escapeshellarg($oldLivePath) . " && mv " . escapeshellarg($preparedPath) . " " . escapeshellarg($liveSite->install_path), 300, "/home/{$username}");
+
+            $import = $this->runWpCli($liveSite->install_path, "db import " . escapeshellarg($stagingDbDump), $username, 300);
+            if (!$import['success']) {
+                throw new \RuntimeException('Live database import from staging failed.');
+            }
+
+            $replace = $this->runWpCli($liveSite->install_path, "search-replace " . escapeshellarg($stagingSite->site_url) . " " . escapeshellarg($liveSite->site_url) . " --all-tables", $username, 300);
+            if (!$replace['success']) {
+                throw new \RuntimeException('Live URL search-replace failed.');
+            }
 
             $this->setFileOwnership($liveSite->install_path, $username);
             $this->setSafePermissions($liveSite->install_path, $username);
 
-            Process::timeout(10)->run("rm -f /tmp/wp_push_db_{$liveSite->id}.sql");
+            ShellService::runAsUser($username, "rm -rf " . escapeshellarg($oldLivePath), 120, "/home/{$username}");
+            Process::timeout(10)->run("rm -f " . escapeshellarg($stagingDbDump) . " " . escapeshellarg($liveDbDump));
 
+            $stagingSite->update(['last_pushed_at' => now()]);
             $this->purgeAfterUpdate($liveSite);
             return $this->finishTask($task, [
                 'success' => true,
@@ -552,7 +688,55 @@ class WordPressService
                 'error' => '',
             ]);
         } catch (\Throwable $e) {
+            if (isset($username) && $this->pathInsideHome($oldLivePath, $username)) {
+                ShellService::runAsUser($username, "if [ -d " . escapeshellarg($oldLivePath) . " ]; then rm -rf " . escapeshellarg($liveSite->install_path) . " && mv " . escapeshellarg($oldLivePath) . " " . escapeshellarg($liveSite->install_path) . "; fi", 300, "/home/{$username}");
+            }
+            if (isset($username) && $this->pathInsideHome($preparedPath, $username)) {
+                ShellService::runAsUser($username, "rm -rf " . escapeshellarg($preparedPath), 120, "/home/{$username}");
+            }
+            if (is_file($liveDbDump)) {
+                $this->runWpCli($liveSite->install_path, "db import " . escapeshellarg($liveDbDump), $username, 300);
+            }
+            Process::timeout(10)->run("rm -f " . escapeshellarg($stagingDbDump) . " " . escapeshellarg($liveDbDump));
             return $this->failTask($task, $e->getMessage());
+        }
+    }
+
+    public function deleteStaging(WordPressSite $liveOrStagingSite, ?string $stagingDomain = null): array
+    {
+        $stagingSite = ($liveOrStagingSite->site_type ?? 'live') === 'staging'
+            ? $liveOrStagingSite
+            : WordPressSite::where('parent_site_id', $liveOrStagingSite->id)
+                ->where('site_type', 'staging')
+                ->when($stagingDomain, fn($q) => $q->where('domain', $stagingDomain))
+                ->first();
+
+        if (!$stagingSite) {
+            return ['success' => false, 'message' => 'Staging site not found.'];
+        }
+
+        $username = $this->getUsername($stagingSite);
+        if (!$username || !$this->pathInsideHome($stagingSite->install_path, $username)) {
+            return ['success' => false, 'message' => 'Invalid staging path.'];
+        }
+
+        try {
+            $stack = $this->stackService->getActiveStack();
+            $this->stackService->removeDomainScopedVhost($stack, $username, $stagingSite->domain);
+            ShellService::runAsUser($username, "rm -rf " . escapeshellarg($stagingSite->install_path), 120, "/home/{$username}");
+            $parentDir = dirname($stagingSite->install_path);
+            ShellService::runAsUser($username, "rmdir " . escapeshellarg($parentDir) . " 2>/dev/null || true", 10, "/home/{$username}");
+            $this->dropMysqlDatabase($stagingSite->db_name);
+            $this->dropMysqlUser($stagingSite->db_user);
+            $stagingSite->delete();
+
+            return [
+                'success' => true,
+                'output' => "Deleted staging site {$stagingSite->domain}",
+                'domain' => $stagingSite->domain,
+            ];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'message' => $e->getMessage()];
         }
     }
 
@@ -872,6 +1056,27 @@ class WordPressService
         return substr($username, 0, 16) . $suffix;
     }
 
+    protected function generateUniqueDbUser(string $username, string $suffix = '_wp'): string
+    {
+        $base = substr($username, 0, 12) . $suffix;
+        for ($i = 0; $i < 100; $i++) {
+            $candidate = $base . ($i === 0 ? '' : $i);
+            $exists = $this->mysql()->select('SELECT User FROM mysql.user WHERE User = ? LIMIT 1', [$candidate]);
+            if (!$exists) {
+                return $candidate;
+            }
+        }
+
+        return substr($base, 0, 22) . Str::lower(Str::random(6));
+    }
+
+    protected function pathInsideHome(string $path, string $username): bool
+    {
+        $home = "/home/{$username}";
+        $normalized = rtrim(str_replace('\\', '/', $path), '/');
+        return $normalized === $home || str_starts_with($normalized . '/', $home . '/');
+    }
+
     protected function fetchSalts(): string
     {
         $result = Process::timeout(15)->run("curl -s https://api.wordpress.org/secret-key/1.1/salt/ 2>/dev/null");
@@ -1172,52 +1377,45 @@ VCL;
 
     public function testVarnishCacheHit(WordPressSite $site): array
     {
-        $domain = $site->domain;
-        $result = Process::timeout(15)->run("curl -sI -H 'Host: {$domain}' http://127.0.0.1/ 2>/dev/null | grep -i x-cache");
-        $cacheHeader = trim($result->output());
-        $isHit = stripos($cacheHeader, 'HIT') !== false;
+        $result = (new VarnishDomainService())->test($site->domain);
+        $cacheHeader = 'X-Cache: ' . ($result['second']['x_cache'] ?? 'MISS');
+        $isHit = (bool) ($result['html_hit'] ?? false);
 
         return [
             'success' => true,
             'header' => $cacheHeader,
             'is_hit' => $isHit,
             'message' => $isHit ? 'Varnish cache HIT' : 'Varnish cache MISS',
+            'result' => $result,
         ];
     }
 
-    public function configureVarnishRules(WordPressSite $site): void
+    public function configureVarnishRules(WordPressSite $site, string $mode = 'cache'): array
     {
         $stack = $this->stackService->getActiveStack();
         if (!str_contains($stack, 'varnish')) {
-            return;
+            return ['success' => false, 'message' => 'Active stack does not use Varnish.'];
         }
 
-        $varnishVcl = '/etc/varnish/wordpress.vcl';
-        $rules = $this->generateVarnishWordPressVcl();
+        $result = (new VarnishDomainService())->configure($site->domain, [
+            'varnish_enabled' => $mode !== 'bypass',
+            'varnish_mode' => $mode,
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => $mode === 'cache' ? 300 : 0,
+            'static_ttl' => 86400,
+            'grace_ttl' => 3600,
+            'purge_enabled' => true,
+        ]);
 
-        $tempFile = tempnam(sys_get_temp_dir(), 'vcl');
-        file_put_contents($tempFile, $rules);
-        Process::timeout(10)->run("cp {$tempFile} {$varnishVcl}");
-        @unlink($tempFile);
+        $site->update(['varnish_enabled' => $mode !== 'bypass']);
 
-        $site->update(['varnish_enabled' => true]);
+        return $result;
     }
 
     public function purgeVarnishCache(WordPressSite $site): array
     {
-        $domain = $site->domain;
-
-        // BAN by domain
-        $result = Process::timeout(10)->run("varnishadm 'ban req.http.host == {$domain}' 2>/dev/null");
-
-        if (!$result->successful()) {
-            // Fallback: generic purge
-            Process::timeout(10)->run("varnishadm 'ban req.url ~ .*' 2>/dev/null");
-        }
-
-        return [
-            'success' => true,
-            'message' => "Varnish cache purged for {$domain}",
+        return (new VarnishDomainService())->purge($site->domain) + [
+            'message' => "Varnish cache purged for {$site->domain}",
         ];
     }
 
@@ -1291,6 +1489,11 @@ VCL;
             'php_fpm_upload_max_filesize' => 64,
             'redis_enabled' => true,
             'varnish_enabled' => true,
+            'varnish_mode' => 'shield',
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => 0,
+            'static_ttl' => 86400,
+            'grace_ttl' => 3600,
             'wp_cron_disabled' => false,
             'xmlrpc_blocked' => false,
             'static_cache_ttl' => '30d',
@@ -1305,6 +1508,11 @@ VCL;
             'php_fpm_upload_max_filesize' => 32,
             'redis_enabled' => true,
             'varnish_enabled' => true,
+            'varnish_mode' => 'cache',
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => 300,
+            'static_ttl' => 86400,
+            'grace_ttl' => 3600,
             'wp_cron_disabled' => true,
             'xmlrpc_blocked' => true,
             'static_cache_ttl' => '90d',
@@ -1319,6 +1527,11 @@ VCL;
             'php_fpm_upload_max_filesize' => 128,
             'redis_enabled' => true,
             'varnish_enabled' => true,
+            'varnish_mode' => 'shield',
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => 0,
+            'static_ttl' => 86400,
+            'grace_ttl' => 3600,
             'wp_cron_disabled' => false,
             'xmlrpc_blocked' => true,
             'static_cache_ttl' => '30d',
@@ -1332,7 +1545,12 @@ VCL;
             'php_fpm_max_execution_time' => 90,
             'php_fpm_upload_max_filesize' => 128,
             'redis_enabled' => true,
-            'varnish_enabled' => false,
+            'varnish_enabled' => true,
+            'varnish_mode' => 'shield',
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => 0,
+            'static_ttl' => 86400,
+            'grace_ttl' => 3600,
             'wp_cron_disabled' => false,
             'xmlrpc_blocked' => true,
             'static_cache_ttl' => '7d',
@@ -1347,6 +1565,11 @@ VCL;
             'php_fpm_upload_max_filesize' => 256,
             'redis_enabled' => false,
             'varnish_enabled' => false,
+            'varnish_mode' => 'bypass',
+            'static_asset_mode' => 'nginx_direct',
+            'html_ttl' => 0,
+            'static_ttl' => 86400,
+            'grace_ttl' => 0,
             'wp_cron_disabled' => false,
             'xmlrpc_blocked' => false,
             'static_cache_ttl' => '0',
@@ -1385,10 +1608,16 @@ VCL;
             $this->disableRedis($site);
         }
 
-        // Apply Varnish
-        if ($profile['varnish_enabled'] && !$site->varnish_enabled) {
-            $this->configureVarnishRules($site);
-        }
+        // Apply Varnish mode/static routing. No WordPress plugin is required.
+        (new VarnishDomainService())->configure($site->domain, [
+            'varnish_enabled' => $profile['varnish_enabled'],
+            'varnish_mode' => $profile['varnish_mode'],
+            'static_asset_mode' => $profile['static_asset_mode'],
+            'html_ttl' => $profile['html_ttl'],
+            'static_ttl' => $profile['static_ttl'],
+            'grace_ttl' => $profile['grace_ttl'],
+            'purge_enabled' => true,
+        ]);
         $site->update(['varnish_enabled' => $profile['varnish_enabled']]);
 
         // Apply WP-Cron
@@ -1468,6 +1697,7 @@ listen = /run/openpanel-php-user-{$username}.sock
 listen.owner = nginx
 listen.group = nginx
 listen.mode = 0660
+listen.acl_users = nginx,apache
 
 pm = {$pm}
 pm.max_children = {$maxChildren}
@@ -1489,7 +1719,7 @@ FPM;
         $pool .= "\npm.max_requests = 500";
         $pool .= "\n";
         $pool .= "\nphp_admin_value[error_log] = {$home}/logs/php-error.log";
-        $pool .= "\nphp_admin_flag[log_errors] = on";
+        $pool .= "\nphp_admin_flag[log_errors] = 1";
         $pool .= "\nphp_value[memory_limit] = {$memoryLimit}M";
         $pool .= "\nphp_value[max_execution_time] = {$maxExecTime}";
         $pool .= "\nphp_value[upload_max_filesize] = {$uploadSize}M";
@@ -1744,4 +1974,3 @@ FPM;
         return true;
     }
 }
-
