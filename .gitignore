@@ -32,3 +32,8 @@ htdocs/
 /configs/
 /open_panel
 /_*.py
+/.openpanel-credentials
+/openpanel-install.log
+/_vps_*
+/*.pem
+/*.key
