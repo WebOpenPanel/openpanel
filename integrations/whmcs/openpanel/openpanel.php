@@ -26,7 +26,7 @@ function openpanel_MetaData()
 function openpanel_ConfigOptions()
 {
     return [
-        'API URL' => ['Type' => 'text', 'Size' => '50', 'Default' => 'https://server.example.com:2087', 'Description' => 'OpenPanel API base URL'],
+        'API URL' => ['Type' => 'text', 'Size' => '50', 'Default' => 'https://192.0.2.10:2087', 'Description' => 'OpenPanel API base URL'],
         'API Token' => ['Type' => 'password', 'Size' => '50', 'Default' => '', 'Description' => 'API token from OpenPanel admin'],
         'Product ID Mapping' => ['Type' => 'text', 'Size' => '20', 'Default' => '', 'Description' => 'OpenPanel billing product ID (optional)'],
         'Auto Install WordPress' => ['Type' => 'yesno', 'Default' => '0', 'Description' => 'Install WordPress on account creation'],
@@ -131,7 +131,7 @@ function openpanel_ChangePackage(array $params): string
     return $response['success'] ? 'success' : ($response['error'] ?? 'Package change failed');
 }
 
-// ─── Internal Helpers ──────────────────────────────────────────
+// Internal Helpers
 
 function apiRequest(array $params, string $method, string $path, array $data = []): array
 {
@@ -168,5 +168,12 @@ function apiRequest(array $params, string $method, string $path, array $data = [
 function generatePassword(int $length = 16): string
 {
     $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-    return substr(str_shuffle(str_repeat($chars, ceil($length / strlen($chars)))), 0, $length);
+    $password = '';
+    $max = strlen($chars) - 1;
+
+    for ($i = 0; $i < $length; $i++) {
+        $password .= $chars[random_int(0, $max)];
+    }
+
+    return $password;
 }

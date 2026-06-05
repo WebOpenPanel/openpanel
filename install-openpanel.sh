@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 022
 
 LANG=en_US.UTF-8
 export LANG
@@ -39,6 +40,8 @@ show_help() {
     echo "Environment Variables:"
     echo "  NON_INTERACTIVE=y            Same as --non-interactive"
     echo "  OPENPANEL_WEB_STACK=STACK    Same as --stack=STACK"
+    echo "  OPENPANEL_HOSTNAME=HOSTNAME  Same as --hostname=HOSTNAME"
+    echo "  OPENPANEL_EMAIL=EMAIL        Same as --email=EMAIL"
     echo ""
     echo "Examples:"
     echo "  sudo bash install-openpanel.sh"
@@ -151,13 +154,16 @@ gather_config() {
     echo -e "${BLUE}=== OpenPanel Installation Configuration ===${NC}"
     echo ""
 
+    PANEL_HOSTNAME="${PANEL_HOSTNAME:-${OPENPANEL_HOSTNAME:-}}"
+    PANEL_EMAIL="${PANEL_EMAIL:-${OPENPANEL_EMAIL:-}}"
+
     if [[ "${NON_INTERACTIVE:-}" == "y" ]]; then
         # On re-run, preserve existing passwords from .env
         if [ -f "$INSTALL_DIR/.env" ]; then
             local existing_db_pass
-            existing_db_pass=$(grep '^DB_PASSWORD=' "$INSTALL_DIR/.env" | cut -d= -f2 | tr -d '"' | tr -d "'")
+            existing_db_pass=$({ grep '^DB_PASSWORD=' "$INSTALL_DIR/.env" || true; } | cut -d= -f2 | tr -d '"' | tr -d "'")
             local existing_root_pass
-            existing_root_pass=$(grep '^MYSQL_ROOT_PASSWORD=' "$INSTALL_DIR/.env" | cut -d= -f2 | tr -d '"' | tr -d "'" 2>/dev/null)
+            existing_root_pass=$({ grep '^MYSQL_ROOT_PASSWORD=' "$INSTALL_DIR/.env" || true; } | cut -d= -f2 | tr -d '"' | tr -d "'")
             if [ -n "$existing_db_pass" ]; then
                 DB_PASSWORD="$existing_db_pass"
                 log "Preserved existing DB_PASSWORD from .env"
@@ -167,6 +173,9 @@ gather_config() {
             if [ -n "$existing_root_pass" ]; then
                 MYSQL_ROOT_PASSWORD="$existing_root_pass"
                 log "Preserved existing MYSQL_ROOT_PASSWORD from .env"
+            elif [ -f /root/.my.cnf ]; then
+                MYSQL_ROOT_PASSWORD="$(grep '^password=' /root/.my.cnf | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+                log "Preserved existing MYSQL_ROOT_PASSWORD from /root/.my.cnf"
             else
                 MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)}"
             fi
@@ -178,18 +187,20 @@ gather_config() {
         SERVER_IP="${SERVER_IP:-$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)}"
         ENABLE_SSL="${ENABLE_SSL:-Y}"
         INSTALL_MAIL="${INSTALL_MAIL:-Y}"
+        INSTALL_WEBMAIL="${INSTALL_WEBMAIL:-Y}"
         DO_RESTART="${DO_RESTART:-N}"
         log "Non-interactive mode: using environment variables / defaults"
     else
-        read -p "MySQL root password (leave blank to auto-generate): " MYSQL_ROOT_PASSWORD
+        read -s -p "MySQL root password (leave blank to auto-generate): " MYSQL_ROOT_PASSWORD
+        echo ""
         if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
             MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
-            log "Generated MySQL root password: $MYSQL_ROOT_PASSWORD"
+            log "Generated MySQL root password (saved in credentials file)"
         fi
 
         DB_PASSWORD=$(openssl rand -base64 16 | tr -dc A-Za-z0-9 | head -c 20)
 
-        read -p "Set root password for admin panel (leave blank to keep current): " ROOT_PASSWORD
+        read -s -p "Set root password for admin panel (leave blank to keep current): " ROOT_PASSWORD
         echo ""
 
         read -p "Server IP (auto-detected): " SERVER_IP
@@ -202,6 +213,9 @@ gather_config() {
 
         read -p "Install mail server (Postfix/Dovecot)? (Y/n): " INSTALL_MAIL
         INSTALL_MAIL="${INSTALL_MAIL:-Y}"
+
+        read -p "Install Roundcube webmail? (Y/n): " INSTALL_WEBMAIL
+        INSTALL_WEBMAIL="${INSTALL_WEBMAIL:-Y}"
 
         read -p "Restart server after install? (y/N): " DO_RESTART
         DO_RESTART="${DO_RESTART:-N}"
@@ -315,10 +329,10 @@ install_mariadb() {
         err "MariaDB failed to start"
     fi
 
-    if mysqladmin -u root status &>/dev/null 2>&1; then
+    if mysqladmin --no-defaults -u root status &>/dev/null 2>&1; then
         # Root has no password yet (fresh install) — switch from unix_socket to password auth
-        mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password;" 2>&1 | tee -a "$LOG_FILE"
-        mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" 2>&1 | tee -a "$LOG_FILE"
+        mysql --no-defaults -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED VIA mysql_native_password;" 2>&1 | tee -a "$LOG_FILE"
+        mysqladmin --no-defaults -u root password "$MYSQL_ROOT_PASSWORD" 2>&1 | tee -a "$LOG_FILE"
         log "MySQL root password set"
     elif mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" &>/dev/null 2>&1; then
         log "MySQL root password already set and verified"
@@ -327,7 +341,7 @@ install_mariadb() {
         warn "MySQL root password mismatch, attempting recovery..."
         if [ -f /root/.my.cnf ]; then
             local cnf_pass
-            cnf_pass=$(grep '^password=' /root/.my.cnf | cut -d= -f2)
+            cnf_pass=$(grep '^password=' /root/.my.cnf | cut -d= -f2-)
             if [ -n "$cnf_pass" ] && mysql -u root -p"$cnf_pass" -e "SELECT 1;" &>/dev/null 2>&1; then
                 mysql -u root -p"$cnf_pass" -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';" 2>&1 | tee -a "$LOG_FILE"
                 log "Recovered MySQL root password from .my.cnf"
@@ -361,6 +375,7 @@ EOF
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+GRANT ALL PRIVILEGES ON *.* TO '${DB_USER}'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOSQL
 
@@ -406,8 +421,7 @@ clone_project() {
     step "Installing OpenPanel"
 
     if [ -d "$INSTALL_DIR" ]; then
-        log "Existing installation found, backing up .env..."
-        cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak.$(date +%s)" 2>/dev/null || true
+        log "Existing installation found, preserving runtime configuration"
     fi
 
     if [ -d "$INSTALL_DIR/.git" ]; then
@@ -429,10 +443,23 @@ clone_project() {
 configure_env() {
     step "Configuring Environment"
 
-    cat > "$INSTALL_DIR/.env" <<EOF
+    local existing_app_key=""
+    local existing_mail_from=""
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        existing_app_key=$({ grep '^APP_KEY=' "$INSTALL_DIR/.env" || true; } | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+        existing_mail_from=$({ grep '^MAIL_FROM_ADDRESS=' "$INSTALL_DIR/.env" || true; } | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+    local mail_from="${PANEL_EMAIL:-${existing_mail_from:-}}"
+    if [ -z "$mail_from" ]; then
+        mail_from="noreply@$(hostname -f 2>/dev/null || hostname)"
+    fi
+
+    local env_tmp
+    env_tmp=$(mktemp)
+    cat > "$env_tmp" <<EOF
 APP_NAME="OpenPanel"
 APP_ENV=production
-APP_KEY=
+APP_KEY=${existing_app_key}
 APP_DEBUG=false
 APP_URL=https://${SERVER_IP}:2087
 
@@ -468,12 +495,33 @@ MAIL_PORT=25
 MAIL_USERNAME=null
 MAIL_PASSWORD=null
 MAIL_ENCRYPTION=null
-MAIL_FROM_ADDRESS="${PANEL_EMAIL:-noreply@$(hostname -f 2>/dev/null || hostname)}"
+MAIL_FROM_ADDRESS="${mail_from}"
 MAIL_FROM_NAME="OpenPanel"
 EOF
 
+    if [ -f "$INSTALL_DIR/.env" ] && ! cmp -s "$env_tmp" "$INSTALL_DIR/.env"; then
+        install -d -m 0700 /var/lib/openpanel/backups/env
+        local env_backup="/var/lib/openpanel/backups/env/.env.bak.$(date +%s)"
+        cp -p "$INSTALL_DIR/.env" "$env_backup" 2>/dev/null || true
+        chmod 0600 "$env_backup" 2>/dev/null || true
+        log "Existing .env backed up to secure root-only backup directory"
+    fi
+
+    if ! install -m 0640 -o root -g nginx "$env_tmp" "$INSTALL_DIR/.env" 2>/dev/null; then
+        cp "$env_tmp" "$INSTALL_DIR/.env"
+        chown root:root "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 0640 "$INSTALL_DIR/.env"
+    fi
+    rm -f "$env_tmp"
+
     cd "$INSTALL_DIR"
-    php artisan key:generate --force 2>&1 | tee -a "$LOG_FILE"
+    if [ -n "$existing_app_key" ]; then
+        log "Preserved existing APP_KEY"
+    else
+        php artisan key:generate --force 2>&1 | tee -a "$LOG_FILE"
+        chown root:nginx "$INSTALL_DIR/.env" 2>/dev/null || chown root:root "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 0640 "$INSTALL_DIR/.env"
+    fi
 
     log "Environment configured"
 }
@@ -518,11 +566,59 @@ build_assets() {
 
     cd "$INSTALL_DIR"
     if command -v npm &>/dev/null; then
-        npm install --ignore-scripts 2>&1 | tee -a "$LOG_FILE"
-        npm run build 2>&1 | tee -a "$LOG_FILE"
-        log "Assets built"
+        local manifest="$INSTALL_DIR/public/build/manifest.json"
+        local needs_build="n"
+
+        if [[ "${OPENPANEL_REBUILD_ASSETS:-n}" == "y" || ! -f "$manifest" ]]; then
+            needs_build="y"
+        fi
+
+        if [[ "$needs_build" == "y" ]]; then
+            npm install --ignore-scripts 2>&1 | tee -a "$LOG_FILE"
+            npm run build 2>&1 | tee -a "$LOG_FILE"
+            log "Assets built"
+        else
+            log "Frontend assets already current"
+        fi
     else
         warn "npm not available, using CDN assets"
+    fi
+}
+
+repair_app_permissions() {
+    [ -d "$INSTALL_DIR" ] || return
+
+    find "$INSTALL_DIR" \
+        -path "$INSTALL_DIR/.env" -prune -o \
+        -path "$INSTALL_DIR/node_modules" -prune -o \
+        -path "$INSTALL_DIR/storage" -prune -o \
+        -path "$INSTALL_DIR/bootstrap/cache" -prune -o \
+        -path "$INSTALL_DIR/bin/auth-check" -prune -o \
+        -type d -exec chmod 0755 {} +
+
+    find "$INSTALL_DIR" \
+        -path "$INSTALL_DIR/.env" -prune -o \
+        -path "$INSTALL_DIR/node_modules" -prune -o \
+        -path "$INSTALL_DIR/storage" -prune -o \
+        -path "$INSTALL_DIR/bootstrap/cache" -prune -o \
+        -path "$INSTALL_DIR/bin/auth-check" -prune -o \
+        -type f -exec chmod 0644 {} +
+
+    [ -f "$INSTALL_DIR/artisan" ] && chmod 0755 "$INSTALL_DIR/artisan"
+    [ -f "$INSTALL_DIR/install-openpanel.sh" ] && chmod 0755 "$INSTALL_DIR/install-openpanel.sh"
+    [ -f "$INSTALL_DIR/tests/tools/file_change_scan.sh" ] && chmod 0755 "$INSTALL_DIR/tests/tools/file_change_scan.sh"
+    [ -f "$INSTALL_DIR/tests/varnish_cache_regression.sh" ] && chmod 0755 "$INSTALL_DIR/tests/varnish_cache_regression.sh"
+    [ -f "$INSTALL_DIR/bin/auth-check" ] && chmod 4755 "$INSTALL_DIR/bin/auth-check"
+    [ -d "$INSTALL_DIR/node_modules/.bin" ] && find "$INSTALL_DIR/node_modules/.bin" -type f -exec chmod 0755 {} +
+
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chown root:nginx "$INSTALL_DIR/.env" 2>/dev/null || chown root:root "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 0640 "$INSTALL_DIR/.env"
+    fi
+
+    if [ -d "$INSTALL_DIR/storage" ] && [ -d "$INSTALL_DIR/bootstrap/cache" ]; then
+        chown -R nginx:nginx "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache" 2>/dev/null || true
+        chmod -R 775 "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache" 2>/dev/null || true
     fi
 }
 
@@ -531,6 +627,10 @@ configure_nginx() {
 
     # Include per-user vhosts (must be before catch-all server blocks)
     mkdir -p /etc/nginx/conf.d/users
+    mkdir -p /etc/nginx/snippets
+    if [ ! -f /etc/nginx/snippets/openpanel-phpmyadmin.conf ]; then
+        echo "# OpenPanel phpMyAdmin include; populated when phpMyAdmin is installed" > /etc/nginx/snippets/openpanel-phpmyadmin.conf
+    fi
     cat > /etc/nginx/conf.d/00-users.conf <<'EONGX0'
 include /etc/nginx/conf.d/users/*.conf;
 EONGX0
@@ -562,6 +662,8 @@ server {
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript;
     gzip_min_length 1000;
+
+    include /etc/nginx/snippets/openpanel-phpmyadmin.conf;
 
     location / {
         try_files $uri $uri/ /index.php?$query_string;
@@ -614,6 +716,8 @@ server {
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript;
     gzip_min_length 1000;
 
+    include /etc/nginx/snippets/openpanel-phpmyadmin.conf;
+
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }
@@ -654,6 +758,10 @@ EONGX2
 
     mkdir -p /run/php-fpm
     chown nginx:nginx /run/php-fpm
+    mkdir -p /etc/php-fpm.d/users
+    if ! grep -q 'include=/etc/php-fpm.d/users' /etc/php-fpm.conf 2>/dev/null; then
+        echo 'include=/etc/php-fpm.d/users/*.conf' >> /etc/php-fpm.conf
+    fi
 
     systemctl enable php-fpm
     systemctl restart php-fpm
@@ -688,7 +796,9 @@ APACHEPHP
 
     # Include user vhost configs from subdirectory
     mkdir -p /etc/httpd/conf.d/users
-    echo 'IncludeOptional conf.d/users/*.conf' >> /etc/httpd/conf/httpd.conf
+    if ! grep -qF 'IncludeOptional conf.d/users/*.conf' /etc/httpd/conf/httpd.conf 2>/dev/null; then
+        echo 'IncludeOptional conf.d/users/*.conf' >> /etc/httpd/conf/httpd.conf
+    fi
 
     systemctl enable httpd 2>&1 | tee -a "$LOG_FILE"
     log "Apache installed on port 8080"
@@ -718,6 +828,14 @@ REPO
 
     # Configure default VCL
     mkdir -p /etc/varnish/conf.d/users
+    {
+        echo "# OpenPanel generated user VCL includes"
+        for user_vcl in /etc/varnish/conf.d/users/*.vcl; do
+            [ -f "$user_vcl" ] || continue
+            printf 'include "%s";\n' "$user_vcl"
+        done
+    } > /etc/varnish/conf.d/openpanel-users.vcl
+    chmod 0644 /etc/varnish/conf.d/openpanel-users.vcl
     cat > /etc/varnish/default.vcl <<'VCL'
 vcl 4.0;
 
@@ -726,15 +844,50 @@ backend default {
     .port = "8080";
 }
 
+include "/etc/varnish/conf.d/openpanel-users.vcl";
+
 sub vcl_recv {
     set req.http.X-Forwarded-For = client.ip;
     set req.http.X-Real-IP = client.ip;
+
+    if (req.method != "GET" && req.method != "HEAD") {
+        return (pass);
+    }
+    if (req.http.Authorization) {
+        return (pass);
+    }
+    return (hash);
 }
 
 sub vcl_backend_response {
     if (bereq.url ~ "\.(css|js|jpg|jpeg|png|gif|ico|svg|woff|woff2|ttf|eot|webp)(\?.*)?$") {
-        set beresp.ttl = 30d;
+        unset beresp.http.Set-Cookie;
+        set beresp.ttl = 1d;
+        set beresp.grace = 1h;
+        return (deliver);
     }
+    if (beresp.status != 200 && beresp.status != 301 && beresp.status != 302) {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Surrogate-Control ~ "(?i)no-store") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Cache-Control ~ "(?i)(private|no-cache|no-store)") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    if (beresp.http.Pragma ~ "(?i)no-cache") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        return (deliver);
+    }
+    set beresp.ttl = 5m;
+    set beresp.grace = 1h;
 }
 
 sub vcl_deliver {
@@ -745,6 +898,7 @@ sub vcl_deliver {
     }
 }
 VCL
+    chmod 0644 /etc/varnish/default.vcl
 
     # Set Varnish to listen on 6081
     if [ -f /etc/varnish/varnish.params ]; then
@@ -889,10 +1043,15 @@ optimize_app() {
     php artisan config:cache 2>&1 | tee -a "$LOG_FILE"
     php artisan route:cache 2>&1 | tee -a "$LOG_FILE"
     php artisan view:cache 2>&1 | tee -a "$LOG_FILE"
-    php artisan storage:link 2>&1 | tee -a "$LOG_FILE"
+    if [ -e "$INSTALL_DIR/public/storage" ] || [ -L "$INSTALL_DIR/public/storage" ]; then
+        log "Storage link already present"
+    else
+        php artisan storage:link 2>&1 | tee -a "$LOG_FILE"
+    fi
 
     chown -R nginx:nginx "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache"
     chmod -R 775 "$INSTALL_DIR/storage" "$INSTALL_DIR/bootstrap/cache"
+    repair_app_permissions
 
     log "Application optimized"
 }
@@ -937,6 +1096,305 @@ EOSQL
     log "Mail server installed"
 }
 
+install_opendkim() {
+    if [[ ! "$INSTALL_MAIL" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    step "Installing OpenDKIM"
+
+    dnf -y install epel-release 2>&1 | tee -a "$LOG_FILE" || true
+    if ! rpm -q opendkim >/dev/null 2>&1; then
+        dnf -y install opendkim opendkim-tools 2>&1 | tee -a "$LOG_FILE" || \
+            dnf -y install opendkim 2>&1 | tee -a "$LOG_FILE"
+    fi
+
+    mkdir -p /etc/opendkim/keys
+    touch /etc/opendkim/KeyTable /etc/opendkim/SigningTable /etc/opendkim/TrustedHosts
+
+    local host_name
+    host_name=$(hostname -f 2>/dev/null || hostname)
+    for host in 127.0.0.1 ::1 localhost "$host_name"; do
+        grep -qxF "$host" /etc/opendkim/TrustedHosts 2>/dev/null || echo "$host" >> /etc/opendkim/TrustedHosts
+    done
+
+    cat > /etc/opendkim.conf <<'DKIMCONF'
+Syslog                  yes
+SyslogSuccess           yes
+Canonicalization        relaxed/simple
+Mode                    sv
+SubDomains              no
+OversignHeaders         From
+UserID                  opendkim:opendkim
+Socket                  inet:8891@localhost
+PidFile                 /run/opendkim/opendkim.pid
+UMask                   002
+KeyTable                refile:/etc/opendkim/KeyTable
+SigningTable            refile:/etc/opendkim/SigningTable
+ExternalIgnoreList      refile:/etc/opendkim/TrustedHosts
+InternalHosts           refile:/etc/opendkim/TrustedHosts
+DKIMCONF
+
+    chown -R opendkim:opendkim /etc/opendkim 2>/dev/null || true
+    chmod 0755 /etc/opendkim
+    chmod 0750 /etc/opendkim/keys
+    chmod 0644 /etc/opendkim/KeyTable /etc/opendkim/SigningTable /etc/opendkim/TrustedHosts /etc/opendkim.conf
+
+    postconf -e 'milter_default_action = accept'
+    postconf -e 'milter_protocol = 6'
+    postconf -e 'smtpd_milters = inet:127.0.0.1:8891'
+    postconf -e 'non_smtpd_milters = inet:127.0.0.1:8891'
+
+    postfix check 2>&1 | tee -a "$LOG_FILE" || err "Postfix validation failed after OpenDKIM setup"
+    systemctl enable opendkim postfix
+    systemctl restart opendkim postfix
+
+    log "OpenDKIM installed"
+}
+
+install_roundcube() {
+    if [[ ! "$INSTALL_MAIL" =~ ^[Yy]$ || ! "${INSTALL_WEBMAIL:-Y}" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    step "Installing Roundcube Webmail"
+
+    dnf -y install epel-release 2>&1 | tee -a "$LOG_FILE" || true
+    dnf -y install roundcubemail 2>&1 | tee -a "$LOG_FILE"
+
+    local rc_pass=""
+    local rc_key=""
+    if [ -f /etc/roundcubemail/config.inc.php ]; then
+        rc_pass=$(php -r '$c=@file_get_contents("/etc/roundcubemail/config.inc.php"); if (preg_match("#mysql://roundcube:([^@]+)@#", $c, $m)) echo $m[1];' 2>/dev/null || true)
+        rc_key=$(php -r '$config=[]; @include "/etc/roundcubemail/config.inc.php"; echo $config["des_key"] ?? "";' 2>/dev/null || true)
+    fi
+
+    rc_pass="${rc_pass:-$(openssl rand -base64 24 | tr -dc A-Za-z0-9 | head -c 28)}"
+    rc_key="${rc_key:-$(openssl rand -base64 24 | tr -dc A-Za-z0-9 | head -c 24)}"
+
+    mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<SQL
+CREATE DATABASE IF NOT EXISTS roundcube CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'roundcube'@'localhost' IDENTIFIED BY '${rc_pass}';
+ALTER USER 'roundcube'@'localhost' IDENTIFIED BY '${rc_pass}';
+GRANT ALL PRIVILEGES ON roundcube.* TO 'roundcube'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+
+    if ! mysql -u root -p"$MYSQL_ROOT_PASSWORD" -N -e "SHOW TABLES FROM roundcube LIKE 'users';" | grep -q users; then
+        mysql -u root -p"$MYSQL_ROOT_PASSWORD" roundcube < /usr/share/roundcubemail/SQL/mysql.initial.sql
+    fi
+
+    install -d -m 0750 -o nginx -g nginx /var/lib/roundcubemail/temp /var/log/roundcubemail
+    chgrp -R nginx /etc/roundcubemail
+    find /etc/roundcubemail -type d -exec chmod 0750 {} +
+    find /etc/roundcubemail -type f -exec chmod 0640 {} +
+
+    local rc_tmp
+    rc_tmp=$(mktemp)
+    cat > "$rc_tmp" <<PHP
+<?php
+include_once('/etc/roundcubemail/defaults.inc.php');
+include_once('/etc/roundcubemail/main.inc.php');
+\$config['db_dsnw'] = 'mysql://roundcube:${rc_pass}@localhost/roundcube';
+\$config['default_host'] = '127.0.0.1';
+\$config['default_port'] = 143;
+\$config['smtp_server'] = '127.0.0.1';
+\$config['smtp_port'] = 587;
+\$config['smtp_user'] = '%u';
+\$config['smtp_pass'] = '%p';
+\$config['smtp_auth_type'] = 'LOGIN';
+\$config['support_url'] = '';
+\$config['product_name'] = 'OpenPanel Webmail';
+\$config['des_key'] = '${rc_key}';
+\$config['plugins'] = ['archive', 'zipdownload'];
+\$config['skin'] = 'elastic';
+\$config['temp_dir'] = '/var/lib/roundcubemail/temp';
+\$config['log_dir'] = '/var/log/roundcubemail';
+\$config['enable_installer'] = false;
+\$config['log_driver'] = 'file';
+\$config['drafts_mbox'] = 'Drafts';
+\$config['junk_mbox'] = 'Junk';
+\$config['sent_mbox'] = 'Sent';
+\$config['trash_mbox'] = 'Trash';
+\$config['create_default_folders'] = true;
+\$config['imap_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+\$config['smtp_conn_options'] = ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]];
+PHP
+    php -l "$rc_tmp" >/dev/null
+    install -m 0640 -o root -g nginx "$rc_tmp" /etc/roundcubemail/config.inc.php
+    rm -f "$rc_tmp"
+
+    cat > /etc/nginx/conf.d/openpanel-webmail.conf <<'NGINX'
+server {
+    listen 2095;
+    listen [::]:2095;
+    server_name _;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        try_files $uri =404;
+    }
+
+    return 301 https://$host:2096$request_uri;
+}
+
+server {
+    listen 2096 ssl http2;
+    listen [::]:2096 ssl http2;
+    server_name _;
+
+    root /usr/share/roundcubemail/public_html;
+    index index.php index.html;
+
+    ssl_certificate /etc/pki/tls/certs/openpanel.crt;
+    ssl_certificate_key /etc/pki/tls/private/openpanel.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    client_max_body_size 64M;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include /etc/nginx/fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/run/php-fpm/www.sock;
+        fastcgi_read_timeout 300;
+    }
+
+    location ~ ^/(README|INSTALL|LICENSE|CHANGELOG|UPGRADING)$ { deny all; }
+    location ~ ^/(bin|SQL|config|logs|temp)/ { deny all; }
+    location ~ /\.(?!well-known).* { deny all; }
+}
+NGINX
+    chmod 0644 /etc/nginx/conf.d/openpanel-webmail.conf
+
+    nginx -t 2>&1 | tee -a "$LOG_FILE" || err "Nginx configuration test failed after Roundcube install"
+    systemctl reload nginx 2>&1 | tee -a "$LOG_FILE" || systemctl restart nginx 2>&1 | tee -a "$LOG_FILE"
+    systemctl restart php-fpm 2>&1 | tee -a "$LOG_FILE" || true
+
+    log "Roundcube webmail installed on ports 2095/2096"
+}
+
+install_phpmyadmin() {
+    if [[ ! "${INSTALL_PHPMYADMIN:-Y}" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    step "Installing phpMyAdmin"
+
+    dnf -y install epel-release 2>&1 | tee -a "$LOG_FILE" || true
+    dnf -y install phpMyAdmin 2>&1 | tee -a "$LOG_FILE" || dnf -y install phpmyadmin 2>&1 | tee -a "$LOG_FILE"
+
+    local pma_src=""
+    for candidate in /usr/share/phpMyAdmin /usr/share/phpmyadmin; do
+        if [ -f "$candidate/index.php" ]; then
+            pma_src="$candidate"
+            break
+        fi
+    done
+    [ -n "$pma_src" ] || err "phpMyAdmin package installed but index.php was not found"
+
+    if [ "$pma_src" != "/usr/share/phpmyadmin" ]; then
+        ln -sfn "$pma_src" /usr/share/phpmyadmin
+    fi
+
+    local pma_conf_dir="/etc/phpMyAdmin"
+    [ -d /etc/phpmyadmin ] && pma_conf_dir="/etc/phpmyadmin"
+    mkdir -p "$pma_conf_dir" /var/lib/phpMyAdmin/temp /var/lib/phpmyadmin/temp /etc/nginx/snippets
+    chown -R nginx:nginx /var/lib/phpMyAdmin /var/lib/phpmyadmin 2>/dev/null || true
+    chmod 0750 /var/lib/phpMyAdmin /var/lib/phpMyAdmin/temp /var/lib/phpmyadmin /var/lib/phpmyadmin/temp 2>/dev/null || true
+
+    local pma_secret=""
+    if [ -f "$pma_conf_dir/config.inc.php" ]; then
+        pma_secret=$(php -r '$cfg=[]; @include $argv[1]; echo $cfg["blowfish_secret"] ?? "";' "$pma_conf_dir/config.inc.php" 2>/dev/null || true)
+    fi
+    pma_secret="${pma_secret:-$(openssl rand -base64 48 | tr -dc A-Za-z0-9 | head -c 32)}"
+
+    local pma_tmp
+    pma_tmp=$(mktemp)
+    cat > "$pma_tmp" <<PHP
+<?php
+\$cfg['blowfish_secret'] = '${pma_secret}';
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'cookie';
+\$cfg['Servers'][\$i]['host'] = '127.0.0.1';
+\$cfg['Servers'][\$i]['port'] = '3306';
+\$cfg['Servers'][\$i]['connect_type'] = 'tcp';
+\$cfg['Servers'][\$i]['compress'] = false;
+\$cfg['Servers'][\$i]['AllowNoPassword'] = false;
+\$cfg['Servers'][\$i]['AllowRoot'] = false;
+\$cfg['Servers'][\$i]['AllowDeny']['order'] = 'deny,allow';
+\$cfg['Servers'][\$i]['AllowDeny']['rules'] = ['deny root from all'];
+\$cfg['TempDir'] = is_dir('/var/lib/phpMyAdmin/temp') ? '/var/lib/phpMyAdmin/temp' : '/var/lib/phpmyadmin/temp';
+\$cfg['UploadDir'] = '';
+\$cfg['SaveDir'] = '';
+\$cfg['VersionCheck'] = false;
+\$cfg['SendErrorReports'] = 'never';
+\$cfg['PmaNoRelation_DisableWarning'] = true;
+\$cfg['LoginCookieValidity'] = 1440;
+PHP
+    php -l "$pma_tmp" >/dev/null
+    install -m 0640 -o root -g nginx "$pma_tmp" "$pma_conf_dir/config.inc.php"
+    rm -f "$pma_tmp"
+
+    mkdir -p /etc/phpMyAdmin
+    chown root:nginx /etc/phpMyAdmin
+    chmod 0750 /etc/phpMyAdmin
+    cat > /etc/phpMyAdmin/openpanel-root-block.php <<'PHP'
+<?php
+if (isset($_POST['pma_username']) && strtolower(trim((string) $_POST['pma_username'])) === 'root') {
+    http_response_code(403);
+    exit('Root phpMyAdmin login is disabled by OpenPanel.');
+}
+PHP
+    chown root:nginx /etc/phpMyAdmin/openpanel-root-block.php
+    chmod 0640 /etc/phpMyAdmin/openpanel-root-block.php
+
+    cat > /etc/nginx/snippets/openpanel-phpmyadmin.conf <<'NGINX'
+location = /phpmyadmin {
+    return 302 /phpmyadmin/;
+}
+
+location ~ ^/phpmyadmin/(setup|libraries|templates|vendor|sql|doc|test|tests|examples)/ {
+    deny all;
+}
+
+location ~ ^/phpmyadmin/(.+\.php)$ {
+    root /usr/share;
+    include /etc/nginx/fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    fastcgi_param DOCUMENT_ROOT /usr/share/phpmyadmin;
+    fastcgi_param HTTPS on;
+    fastcgi_param PHP_VALUE "auto_prepend_file=/etc/phpMyAdmin/openpanel-root-block.php";
+    fastcgi_pass unix:/run/php-fpm/www.sock;
+    fastcgi_read_timeout 300;
+}
+
+location /phpmyadmin/ {
+    root /usr/share;
+    index index.php;
+    try_files $uri $uri/ /phpmyadmin/index.php?$query_string;
+}
+NGINX
+    chmod 0644 /etc/nginx/snippets/openpanel-phpmyadmin.conf
+
+    for panel_conf in /etc/nginx/conf.d/openpanel.conf /etc/nginx/conf.d/openpanel-user.conf; do
+        if [ -f "$panel_conf" ] && ! grep -qF 'openpanel-phpmyadmin.conf' "$panel_conf"; then
+            sed -i '/index index.php;/a\    include /etc/nginx/snippets/openpanel-phpmyadmin.conf;' "$panel_conf"
+        fi
+    done
+
+    nginx -t 2>&1 | tee -a "$LOG_FILE" || err "Nginx configuration test failed after phpMyAdmin install"
+    systemctl reload nginx 2>&1 | tee -a "$LOG_FILE" || systemctl restart nginx 2>&1 | tee -a "$LOG_FILE"
+    systemctl restart php-fpm 2>&1 | tee -a "$LOG_FILE" || true
+
+    log "phpMyAdmin installed at /phpmyadmin/ with cookie auth"
+}
+
 install_dns() {
     step "Installing DNS Server (BIND)"
 
@@ -972,22 +1430,92 @@ install_ftp() {
 
     dnf -y install pure-ftpd 2>&1 | tee -a "$LOG_FILE"
 
-    if [ -f /etc/pure-ftpd/pure-ftpd.conf ]; then
-        cp /etc/pure-ftpd/pure-ftpd.conf /etc/pure-ftpd/pure-ftpd.conf.bak.$(date +%s) 2>/dev/null || true
-        sed -i 's/^# PureDB/PureDB/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
-        sed -i 's|PureDB.*@sysconfigdir@.*|PureDB /etc/pure-ftpd/pureftpd.pdb|' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
-        sed -i 's|^PureDB.*pureftpd.pdb$|PureDB /etc/pure-ftpd/pureftpd.pdb|' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
-        sed -i 's/^# NoAnonymous/NoAnonymous/' /etc/pure-ftpd/pure-ftpd.conf 2>/dev/null || true
-    fi
-
     # Create required directories
-    mkdir -p /etc/pure-ftpd
+    mkdir -p /etc/pure-ftpd /etc/pki/tls/private
     echo "yes" > /etc/pure-ftpd/no_unix_privs 2>/dev/null || true
 
-    systemctl enable pure-ftpd
-    systemctl restart pure-ftpd 2>&1 | tee -a "$LOG_FILE" || warn "Pure-FTPd failed to start"
+    local pure_conf="/etc/pure-ftpd/pure-ftpd.conf"
+    local ftps_cert="/etc/pki/tls/private/pure-ftpd.pem"
+    local pure_rollback=""
 
-    log "Pure-FTPd installed"
+    set_pureftpd_config() {
+        local key="$1"
+        local value="$2"
+        local tmp
+        tmp=$(mktemp)
+        awk -v key="$key" -v value="$value" '
+            BEGIN { done = 0; k = tolower(key) }
+            {
+                line = $0
+                sub(/^[ \t#]*/, "", line)
+                split(line, parts, /[ \t]+/)
+                if (tolower(parts[1]) == k) {
+                    if (!done) {
+                        printf "%-28s %s\n", key, value
+                        done = 1
+                    }
+                    next
+                }
+                print
+            }
+            END {
+                if (!done) {
+                    printf "%-28s %s\n", key, value
+                }
+            }
+        ' "$pure_conf" > "$tmp" && install -m 0644 "$tmp" "$pure_conf"
+        rm -f "$tmp"
+    }
+
+    if [ -f "$pure_conf" ]; then
+        if [ ! -f /etc/pure-ftpd/pure-ftpd.conf.openpanel.orig ]; then
+            cp "$pure_conf" /etc/pure-ftpd/pure-ftpd.conf.openpanel.orig 2>/dev/null || true
+            chmod 0600 /etc/pure-ftpd/pure-ftpd.conf.openpanel.orig 2>/dev/null || true
+        fi
+
+        pure_rollback=$(mktemp)
+        cp -p "$pure_conf" "$pure_rollback" 2>/dev/null || true
+
+        if [ ! -s "$ftps_cert" ]; then
+            local tmp_pem
+            tmp_pem=$(mktemp)
+            if [ -s /etc/pki/tls/private/openpanel.key ] && [ -s /etc/pki/tls/certs/openpanel.crt ]; then
+                cat /etc/pki/tls/private/openpanel.key /etc/pki/tls/certs/openpanel.crt > "$tmp_pem"
+            else
+                local tmp_key tmp_crt
+                tmp_key=$(mktemp)
+                tmp_crt=$(mktemp)
+                openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+                    -keyout "$tmp_key" \
+                    -out "$tmp_crt" \
+                    -subj "/C=US/ST=OpenPanel/L=OpenPanel/O=OpenPanel/OU=FTPS/CN=${HOSTNAME:-openpanel.local}" \
+                    >/dev/null 2>&1
+                cat "$tmp_key" "$tmp_crt" > "$tmp_pem"
+                rm -f "$tmp_key" "$tmp_crt"
+            fi
+            install -m 0600 -o root -g root "$tmp_pem" "$ftps_cert"
+            rm -f "$tmp_pem"
+        fi
+        chmod 0600 "$ftps_cert" 2>/dev/null || true
+
+        set_pureftpd_config "PureDB" "/etc/pure-ftpd/pureftpd.pdb"
+        set_pureftpd_config "ChrootEveryone" "yes"
+        set_pureftpd_config "NoAnonymous" "yes"
+        set_pureftpd_config "PassivePortRange" "30000 31000"
+        set_pureftpd_config "TLS" "1"
+        set_pureftpd_config "TLSCipherSuite" "HIGH"
+        set_pureftpd_config "CertFile" "$ftps_cert"
+    fi
+
+    systemctl enable pure-ftpd
+    if ! systemctl restart pure-ftpd 2>&1 | tee -a "$LOG_FILE"; then
+        warn "Pure-FTPd failed after OpenPanel FTPS config; restoring previous config"
+        [ -n "$pure_rollback" ] && [ -f "$pure_rollback" ] && cp -p "$pure_rollback" "$pure_conf"
+        systemctl restart pure-ftpd 2>&1 | tee -a "$LOG_FILE" || warn "Pure-FTPd failed to start"
+    fi
+    rm -f "$pure_rollback" /etc/pure-ftpd/pure-ftpd.conf.openpanel.prev 2>/dev/null || true
+
+    log "Pure-FTPd installed with explicit FTPS support"
 }
 
 install_firewall() {
@@ -1007,13 +1535,17 @@ install_firewall() {
             53/tcp    # DNS
             53/udp    # DNS
             21/tcp    # FTP
+            25/tcp    # SMTP
+            143/tcp   # IMAP
+            587/tcp   # SMTP submission
+            993/tcp   # IMAPS
             2082/tcp  # User panel HTTP
             2083/tcp  # User panel HTTPS
             2086/tcp  # Admin panel HTTP
             2087/tcp  # Admin panel HTTPS
             2095/tcp  # Webmail HTTP
             2096/tcp  # Webmail HTTPS
-            30000:31000/tcp  # FTP passive
+            30000-31000/tcp  # FTP passive
         )
         for port in "${ports[@]}"; do
             firewall-cmd --permanent --add-port="$port" 2>/dev/null || true
@@ -1103,7 +1635,7 @@ save_credentials() {
 Panel URL (Admin): https://${SERVER_IP}:2087
 Panel URL (User):  https://${SERVER_IP}:2083
 Admin User:     root (Linux root user)
-Admin Password: (your root password — use 'passwd root' to change)
+Admin Password: (your root password - use 'passwd root' to change)
 
 MySQL Root Password: ${MYSQL_ROOT_PASSWORD}
 OpenPanel DB User:    ${DB_USER}
@@ -1135,20 +1667,26 @@ harden_security() {
         fi
     fi
 
-    # 2. Set ptrace_scope to 1 (prevent cross-process debugging)
-    echo "kernel.yama.ptrace_scope = 1" > /etc/sysctl.d/99-openpanel-security.conf
+    # 2. Set kernel hardening sysctls
+    cat > /etc/sysctl.d/99-openpanel-security.conf <<'SYSCTL'
+kernel.yama.ptrace_scope = 1
+fs.suid_dumpable = 0
+SYSCTL
     sysctl -p /etc/sysctl.d/99-openpanel-security.conf 2>/dev/null || true
-    log "Set ptrace_scope = 1"
+    log "Applied OpenPanel sysctl hardening"
 
     # 3. Disable core dumps
-    echo "* hard core 0" >> /etc/security/limits.d/99-openpanel.conf 2>/dev/null
-    echo "fs.suid_dumpable = 0" >> /etc/sysctl.d/99-openpanel-security.conf
-    sysctl -p /etc/sysctl.d/99-openpanel-security.conf 2>/dev/null || true
+    echo "* hard core 0" > /etc/security/limits.d/99-openpanel.conf 2>/dev/null
     log "Disabled core dumps"
 
-    # 4. Set restrictive umask for new users
-    echo "UMASK 077" >> /etc/login.defs 2>/dev/null
-    log "Set default UMASK 077"
+    # 4. Keep system umask compatible with root-managed service files.
+    # Account isolation is enforced with per-account ownership, chmod, ACLs, and PHP-FPM pools.
+    if grep -qE '^UMASK[[:space:]]+' /etc/login.defs 2>/dev/null; then
+        sed -i 's/^UMASK[[:space:]].*/UMASK 022/' /etc/login.defs 2>/dev/null || true
+    else
+        echo "UMASK 022" >> /etc/login.defs 2>/dev/null
+    fi
+    log "Set default UMASK 022"
 
     # 5. Create proc group for hidepid
     if ! getent group proc > /dev/null 2>&1; then
@@ -1181,9 +1719,9 @@ print_summary() {
     echo -e "${GREEN}║${NC}  Admin User:     ${YELLOW}root${NC} (Linux root user)"
     echo -e "${GREEN}║${NC}  Admin Password: ${YELLOW}(your root password)${NC}"
     echo -e "${GREEN}║${NC}"
-    echo -e "${GREEN}║${NC}  MySQL Root Pwd: ${YELLOW}${MYSQL_ROOT_PASSWORD}${NC}"
+    echo -e "${GREEN}║${NC}  MySQL Root Pwd: ${YELLOW}(saved in credentials file)${NC}"
     echo -e "${GREEN}║${NC}  DB User:      ${YELLOW}${DB_USER}${NC}"
-    echo -e "${GREEN}║${NC}  DB Password:  ${YELLOW}${DB_PASSWORD}${NC}"
+    echo -e "${GREEN}║${NC}  DB Password:  ${YELLOW}(saved in credentials file)${NC}"
     echo -e "${GREEN}║${NC}"
     echo -e "${GREEN}║${NC}  Install Dir:    ${INSTALL_DIR}"
     echo -e "${GREEN}║${NC}  PHP Version:    ${PHP_VERSION}"
@@ -1232,15 +1770,20 @@ main() {
         install_redis
         install_wp_cli
         clone_project
+        repair_app_permissions
         configure_env
         run_migrations
         create_admin_user
         build_auth_helper
         build_assets
+        repair_app_permissions
         if [[ "${SKIP_SSL:-}" != "y" ]]; then
             generate_ssl
+        elif [[ -f /etc/pki/tls/certs/openpanel.crt && -f /etc/pki/tls/private/openpanel.key ]]; then
+            log "Skipping SSL generation (--skip-ssl); existing panel certificate found"
         else
-            log "Skipping SSL generation (--skip-ssl)"
+            warn "--skip-ssl requested, but no panel certificate exists; generating self-signed fallback for nginx"
+            generate_ssl
         fi
         configure_nginx
         if [[ "${OPENPANEL_WEB_STACK:-nginx_phpfpm}" == "nginx_varnish_apache" ]]; then
@@ -1255,6 +1798,9 @@ main() {
         setup_cron
         optimize_app
         install_mail
+        install_opendkim
+        install_roundcube
+        install_phpmyadmin
         harden_security
         save_credentials
     } 2>&1 | tee -a "$LOG_FILE"
