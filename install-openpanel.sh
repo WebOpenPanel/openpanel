@@ -385,15 +385,34 @@ EOSQL
 install_composer() {
     step "Installing Composer"
 
-    if ! command -v composer &>/dev/null; then
-        curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer 2>&1 | tee -a "$LOG_FILE"
+    export COMPOSER_ALLOW_SUPERUSER=1
+    export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+    local composer_bin="/usr/local/bin/composer"
+
+    if [ -x "$composer_bin" ]; then
+        if COMPOSER_ALLOW_SUPERUSER=1 "$composer_bin" --version >/dev/null 2>&1 || COMPOSER_ALLOW_SUPERUSER=1 php "$composer_bin" --version >/dev/null 2>&1; then
+            ln -sf "$composer_bin" /usr/bin/composer 2>/dev/null || true
+            hash -r 2>/dev/null || true
+            log "Composer already installed: $(COMPOSER_ALLOW_SUPERUSER=1 php "$composer_bin" --version 2>/dev/null | head -1)"
+            return
+        fi
+        warn "Existing Composer binary is not working; reinstalling"
     fi
 
-    if ! command -v composer &>/dev/null; then
+    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer 2>&1 | tee -a "$LOG_FILE"
+
+    chmod +x "$composer_bin"
+    ln -sf "$composer_bin" /usr/bin/composer 2>/dev/null || true
+    hash -r 2>/dev/null || true
+
+    if COMPOSER_ALLOW_SUPERUSER=1 "$composer_bin" --version >/dev/null 2>&1; then
+        log "Composer installed: $(COMPOSER_ALLOW_SUPERUSER=1 "$composer_bin" --version 2>/dev/null | head -1)"
+    elif COMPOSER_ALLOW_SUPERUSER=1 php "$composer_bin" --version >/dev/null 2>&1; then
+        log "Composer installed: $(COMPOSER_ALLOW_SUPERUSER=1 php "$composer_bin" --version 2>/dev/null | head -1)"
+    else
         err "Composer installation failed"
     fi
-
-    log "Composer $(composer --version) installed"
 }
 
 install_nodejs() {
@@ -435,7 +454,7 @@ clone_project() {
         cd "$INSTALL_DIR"
     fi
 
-    composer install --no-dev --optimize-autoloader --no-interaction 2>&1 | tee -a "$LOG_FILE"
+    COMPOSER_ALLOW_SUPERUSER=1 /usr/local/bin/composer install --no-dev --optimize-autoloader --no-interaction 2>&1 | tee -a "$LOG_FILE"
 
     log "Project files installed"
 }
